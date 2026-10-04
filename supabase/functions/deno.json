@@ -1,0 +1,5 @@
+{
+  "nodeModulesDir": "none",
+  "compilerOptions": { "strict": true, "lib": ["deno.ns", "dom", "dom.iterable", "esnext"] },
+  "fmt": { "lineWidth": 140, "singleQuote": true }
+}

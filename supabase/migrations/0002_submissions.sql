@@ -1,5 +1,5 @@
--- DZF 提醒 · v0.1.2：多链接 + 回传文件
--- 在 Supabase Dashboard → SQL Editor 里整段执行（重复执行无害）。
+-- 叮一下 · 多链接 + 回传文件（继承自 DZF 提醒 v0.1.2）
+-- 重复执行无害。
 --
 -- 1. reminders.link 现在可以放多行：每行一个链接，可写「名称 链接」，前端自己拆
 -- 2. reminders.require_upload = true 的提醒：员工必须上传文件（填好的表格 / 照片）才能点完成

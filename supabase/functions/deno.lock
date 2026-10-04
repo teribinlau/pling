@@ -1,0 +1,17 @@
+{
+  "version": "5",
+  "specifiers": {
+    "npm:date-fns-tz@3.2.0": "3.2.0_date-fns@4.4.0"
+  },
+  "npm": {
+    "date-fns-tz@3.2.0_date-fns@4.4.0": {
+      "integrity": "sha512-sg8HqoTEulcbbbVXeg84u5UnlsQa8GS5QXMqjjYIhS4abEVVKIUwe0/l/UhrZdKaL/W5eWZNlbTeEIiOXTcsBQ==",
+      "dependencies": [
+        "date-fns"
+      ]
+    },
+    "date-fns@4.4.0": {
+      "integrity": "sha512-+1UMbeh68lH1SegH83CGWwpb6OHHbpSgr3+s5Eww5M4CAgswBpoWS0AjTOfEJ33HiYKz1hdj/KTFprzXHmq/6w=="
+    }
+  }
+}

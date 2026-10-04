@@ -7,3 +7,4 @@ dev-dist
 src-tauri/target
 src-tauri/gen
 *.log
+.devdb/

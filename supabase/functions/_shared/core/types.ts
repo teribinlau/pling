@@ -1,3 +1,4 @@
+// 自动生成：源文件在 src/lib/，改那边再跑 npm run sync:core，不要直接改这里。
 export type Role = 'admin' | 'member';
 export type Lang = 'zh-CN' | 'de-DE';
 export type Priority = 'low' | 'medium' | 'high';

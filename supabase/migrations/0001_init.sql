@@ -1,6 +1,7 @@
--- DZF 提醒 · 数据库结构 v0.1
--- 在 Supabase Dashboard → SQL Editor 里整段执行，或用 supabase CLI: supabase db push
--- 所有时间都存 timestamptz（UTC），客户端按 Europe/Berlin 显示和展开重复规则。
+-- 叮一下 · Pling · 数据库结构（基础表）
+-- 由部署脚本按文件名顺序执行（deploy/scripts/migrate.sh），每个文件重复执行无害。
+-- 所有时间都存 timestamptz（UTC）；显示和展开重复规则按机构设置里的时区（默认 Asia/Shanghai，见 0007）。
+-- 这一套表从 DZF 提醒 v0.6.2 继承而来（班组、提醒、指派、完成、稍后提醒）。
 
 create extension if not exists pgcrypto;
 
@@ -9,8 +10,7 @@ create extension if not exists pgcrypto;
 -- ---------------------------------------------------------------------------
 create table if not exists public.teams (
   id          uuid primary key default gen_random_uuid(),
-  name_zh     text not null,
-  name_de     text not null,
+  name        text not null,
   color       text not null default '#0E7C6B',
   sort        int  not null default 0,
   created_at  timestamptz not null default now()
@@ -26,7 +26,7 @@ create table if not exists public.profiles (
   name        text not null,
   team_id     uuid references public.teams(id) on delete set null,
   role        text not null default 'member' check (role in ('admin','member')),
-  lang        text not null default 'zh-CN' check (lang in ('zh-CN','de-DE')),
+  lang        text not null default 'zh-CN' check (lang in ('zh-CN','en-US')),
   is_station  boolean not null default false,
   active      boolean not null default true,
   created_at  timestamptz not null default now()
@@ -43,7 +43,7 @@ create table if not exists public.reminders (
   title              text not null,
   notes              text not null default '',
   due_at             timestamptz not null,
-  tz                 text not null default 'Europe/Berlin',
+  tz                 text not null default 'Asia/Shanghai',
   rrule              text,
   skip_holidays      boolean not null default true,
   remind_before_min  int not null default 15,
@@ -60,6 +60,14 @@ create table if not exists public.reminders (
 );
 create index if not exists reminders_due_at_idx on public.reminders (due_at);
 create index if not exists reminders_team_idx   on public.reminders (team_id);
+
+-- 外部来源（以后做导入用）：source 是来源名，source_key 是该来源里的唯一键；手动建的都是 null
+alter table public.reminders
+  add column if not exists source     text,
+  add column if not exists source_key text;
+create unique index if not exists reminders_source_key_idx
+  on public.reminders (source, source_key)
+  where source_key is not null;
 
 -- ---------------------------------------------------------------------------
 -- 指派：给人或给班组（二选一）

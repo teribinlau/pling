@@ -1,11 +1,12 @@
+// 自动生成：源文件在 src/lib/，改那边再跑 npm run sync:core，不要直接改这里。
 // 重复规则：存成 RRULE 兼容字符串，只支持常用的几种，按机构时区（types.ts 的 TZ）的本地时间展开。
 //   null                                  一次性
 //   FREQ=DAILY                            每天
 //   FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR      每周几（每个工作日就是这个）
 //   FREQ=MONTHLY                          每月同一天
-import { fromZonedTime, toZonedTime } from 'date-fns-tz';
-import { TZ } from './types';
-import { isMakeupWorkday, isOffDay } from './holidays';
+import { fromZonedTime, toZonedTime } from 'npm:date-fns-tz@3.2.0';
+import { TZ } from './types.ts';
+import { isMakeupWorkday, isOffDay } from './holidays.ts';
 
 export type RepeatPreset = 'none' | 'daily' | 'weekdays' | 'weekly' | 'monthly' | 'custom';
 
