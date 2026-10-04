@@ -1,9 +1,20 @@
 import type { Assignee, Completion, Occurrence, Profile, Reminder, Snooze, Submission, Team, TeamMembership } from './types';
 import { expandOccurrences } from './recurrence';
 
+/** 统一成 toISOString() 的格式：数据库返回的是 2026-10-09T09:00:00+00:00，本地算出来的是 …T09:00:00.000Z，按字符串比会对不上 */
+export function isoInstant(at: Date | string): string {
+  if (typeof at !== 'string') return at.toISOString();
+  const t = Date.parse(at);
+  return Number.isNaN(t) ? at : new Date(t).toISOString();
+}
+
 export function occurrenceKey(reminderId: string, at: Date | string): string {
-  const iso = typeof at === 'string' ? at : at.toISOString();
-  return `${reminderId}|${iso}`;
+  return `${reminderId}|${isoInstant(at)}`;
+}
+
+/** 某人对某一次到期设的「稍后提醒」（不管它到没到点） */
+export function findSnooze(snoozes: Snooze[], reminderId: string, at: Date, userId: string): Snooze | undefined {
+  return snoozes.find((s) => s.reminder_id === reminderId && s.user_id === userId && sameInstant(s.occurrence_at, at.toISOString()));
 }
 
 export interface BuildInput {

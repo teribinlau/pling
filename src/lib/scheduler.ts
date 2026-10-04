@@ -1,7 +1,7 @@
 // 本地通知调度：每台电脑自己按时弹，不依赖服务器在线。
 // 三个阶段：pre（提前量）→ due（到点）→ overdue（逾期后每 N 分钟重复），每个阶段每次到期只弹一次。
 import { effectiveNotifyPrefs, useStore } from './store';
-import { buildOccurrences, canSee, concernsMe, teamName } from './occurrences';
+import { buildOccurrences, canSee, concernsMe, findSnooze, teamName } from './occurrences';
 import { isTauri, playChime, sendSystemNotification, setTrayBadge, showAlertWindow } from './tauri';
 import { inQuietTime, localHm } from './recurrence';
 import type { NotifyPrefs, Occurrence } from './types';
@@ -103,7 +103,7 @@ export function startScheduler(): () => void {
       }
       // 稍后提醒到期 → 立刻再提醒一次
       if (o.snoozedUntil === null) {
-        const sn = st.snoozes.find((s) => s.reminder_id === o.reminder.id && s.occurrence_at === o.at.toISOString() && s.user_id === st.session!.userId);
+        const sn = findSnooze(st.snoozes, o.reminder.id, o.at, st.session!.userId);
         if (sn) {
           const until = new Date(sn.until).getTime();
           if (until <= now.getTime()) stages.push({ stage: 'due', at: until, key: `${o.key}|snooze|${until}` });
