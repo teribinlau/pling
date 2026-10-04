@@ -1,247 +1,89 @@
-# DZF 提醒 · DZF Erinnerungen
+# 叮一下 · Pling
 
-仓库团队共享提醒：装在每台员工电脑上的桌面应用（Windows / macOS，Tauri 2）+ 手机网页版（PWA），
-数据放在 Supabase（法兰克福），所有人实时共享；可指派给个人或班组；中文 / 德语界面。
+给学校、公司小团队用的共享提醒。老师 / 负责人发一条提醒，指派给班级、部门或个人，到点在电脑、手机和微信里「叮」一下；需要交材料的，系统收齐、统计、批改。
+
+**每家机构单独部署一套**，装在机构自己的国内服务器上（Docker），数据不出机构。
+
+## 功能
+
+- **提醒**：一次性 / 每天 / 每个工作日 / 每周 / 每月，跳过法定节假日（调休上班的日子照常）；提前提醒、到点、逾期再催；指派给人、班级 / 部门或全体
+- **日历和看板**：按天看、按状态看；讨论的截止日期也在日历上
+- **交文件 / 作业统计**：需要回传文件的提醒，自动统计应交 / 已交（按时、迟交）/ 未交，老师可以「通过」或「退回重交」并写批语，导出名单（Excel 能直接打开）
+- **已读回执**：发起人看得到谁看过、谁还没看
+- **附件和链接**：提醒可以挂照片、PDF、表格和在线表单链接
+- **讨论**：发起讨论、带附件留言，发起人结束时可以写结论
+- **登录**：微信扫码（电脑）、微信内一键登录、QQ、邮箱验证码；邀请码一键入组
+- **推送**：微信服务号消息（扫码绑定）、企业微信 / 钉钉 / 飞书群机器人；免打扰时段
+- **客户端**：网页版（手机可「添加到主屏幕」）+ 电脑客户端（Windows 64 / 32 位、macOS，托盘、置顶提醒小窗、开机自启、从机构自己的服务器自动更新）
+- **机构设置**：机构名、称呼（班级 / 部门 / 小组，全校 / 全公司……）、时区、节假日维护；共用设备模式（机房、前台的公用电脑，完成时选名字）；四套皮肤
+
+## 结构
 
 ```
-src/            React + TypeScript 前端（桌面和网页共用一份代码）
-  lib/          数据层（Supabase / 演示模式）、重复规则展开、本地通知调度、离线缓存
-  components/   界面组件（议程日历、看板、详情、新建提醒 …）
-  views/        登录、设置、置顶小窗
-  i18n/         zh-CN / de-DE 语言包
-src-tauri/      桌面壳（托盘、关闭到托盘、置顶提醒小窗、开机自启、自动更新）
-supabase/       数据库迁移（表 + 行级权限 + 实时）、初始班组、Notion 同步云函数 + 定时任务
-.github/        CI 与发版流水线
+src/                React + TypeScript 前端（网页和电脑客户端共用）
+  lib/              数据层（Supabase / 演示模式）、运行时配置、重复规则展开、节假日、本地提醒、登录、作业统计
+  components/ views/ 界面
+src-tauri/          电脑客户端外壳（Tauri 2）
+supabase/
+  migrations/       数据库结构和行级权限（按文件名顺序执行，每个文件都能重复执行）
+  functions/        云函数（Deno）：微信 / QQ 登录、服务号、推送；_shared/core 是从 src/lib 同步过来的提醒展开逻辑
+deploy/             自托管部署：docker-compose.yml、nginx、一键安装 / 迁移 / 证书 / 升级 / 备份 / 恢复脚本
+docs/               架构.md（各部分的约定）、部署指南.md、申请指南.md（微信 / QQ / 群机器人）
+scripts/            本机测试库、同步展开逻辑、打服务器安装包
+tests/              单元测试（vitest）、界面测试（Playwright）、云函数测试（Deno）
 ```
 
----
+前端和云函数怎么对接、数据库有哪些表、云函数的接口，都在 [docs/架构.md](docs/架构.md)。
 
-## 1. 第一次部署（约 30 分钟）
+## 本机开发
 
-### 1.1 Supabase（数据库 + 登录）
-
-1. https://supabase.com → New project，**Region 选 Frankfurt (eu-central-1)**。
-2. 左侧 SQL Editor → 新建查询，把 `supabase/migrations/` 里的 `0001_init.sql`、`0002_sync_source.sql`、`0003_submissions.sql`、`0004_profile_teams.sql`、`0005_attachments.sql`、`0006_discussions.sql`、`0007_discussion_due_date.sql` 按顺序整段粘贴运行；再运行 `supabase/seed.sql`（建 4 个班组）。
-3. Authentication → Providers → Email：保持开启。
-   Authentication → URL Configuration：Site URL 填 Vercel 域名（如 `https://dzf-reminder.vercel.app`），Redirect URLs 加同一个地址。
-   Authentication → Email Templates → Magic Link：在正文里加上验证码 `{{ .Token }}`，例如
-   `<p>点击链接登录：<a href="{{ .ConfirmationURL }}">登录</a></p><p>或在桌面应用里输入验证码：<b>{{ .Token }}</b></p>`
-   （网页版点链接登录，桌面版输入 6 位验证码登录，不需要跳转浏览器。）
-4. Settings → API：记下 **Project URL** 和 **anon public key**。
-
-> 第一个用邮箱登录的人自动成为管理员并激活；之后登录的人默认「待激活」，管理员在应用的「设置 → 账户与班组」里激活并分班组。任何邮箱都能收到登录链接，但激活前什么都看不到。
-
-### 1.2 Vercel（手机网页版 + 下载页）
-
-1. 把本仓库推到 GitHub，在 Vercel 里 Import 这个仓库（Framework 自动识别 Vite）。
-2. Environment Variables 加 `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`。
-3. Deploy。打开域名 → 手机浏览器「添加到主屏幕」即可当 App 用。
-
-两个变量都不填时，网站以**演示模式**运行（内置示例数据，不连服务器），适合先看界面。
-
-### 1.3 桌面安装包（GitHub Actions 自动构建）
-
-1. 生成更新签名密钥（只做一次，私钥妥善保存）：
-   ```bash
-   npx tauri signer generate -w ~/.tauri/dzf.key
-   ```
-   把输出的**公钥**填到 `src-tauri/tauri.conf.json` → `plugins.updater.pubkey`，
-   `endpoints` 已指向 github.com/teribinlau/dzf-reminder 的 Releases（仓库需为公开，否则已装电脑无法下载更新）。
-2. 仓库 Settings → Secrets and variables → Actions，添加：
-   `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`、`TAURI_SIGNING_PRIVATE_KEY`（`~/.tauri/dzf.key` 文件内容）、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
-3. 打 tag 发版：
-   ```bash
-   git tag v0.1.0 && git push --tags
-   ```
-   几分钟后 Releases 页面出现 `-setup.exe` 和 `.msi`（Windows 64 位 `x64` / 32 位 `x86` 各一份）、`.dmg`（macOS），
-   最后一个 `manifest` 任务会把三个平台合成一份 `latest.json`（并行的打包任务各写一份会互相覆盖，所以单独做一步）。
-
-### 1.4 装到员工电脑
-
-- **Windows**：64 位系统下载 `_x64-setup.exe`，32 位系统下载 `_x86-setup.exe`（设置 → 系统 → 关于 → 系统类型 可查），双击安装。
-  装在当前用户目录下，不需要管理员密码，以后自动更新也不会弹 UAC —— **推荐发这个**。
-  要按台统一部署（装到 Program Files）可以改用同名的 `.msi`，但之后每次自动更新都会要管理员密码；批量装：`msiexec /i DZF.Reminder_0.1.2_x64_zh-CN.msi /qn`。
-  需要 Windows 10 及以上（Win7 / 8.1 没有 WebView2，不能用）。
-  没买代码签名证书时首次会出 SmartScreen 提示：点「更多信息 → 仍要运行」。
-- **macOS**：打开 `.dmg` 拖到「应用程序」，第一次双击会被拦（没有 Apple 开发者签名 + 公证）：
-  打开 **系统设置 → 隐私与安全性**，拉到最下面「安全性」一栏，点 **仍要打开** → 输入电脑密码。只需这一次，之后正常双击，自动更新也不会再拦。
-  （macOS 15 Sequoia 起「右键 → 打开」已经不管用了，只能走系统设置。）
-  如果提示的是 **“已损坏，无法打开”**（v0.2.1 及更早的包会这样，没有整包签名），在「终端」里跑一句再打开：
-  `xattr -dr com.apple.quarantine "/Applications/DZF Reminder.app"`
-  从 v0.2.2 起安装包做了 ad-hoc 签名（`bundle.macOS.signingIdentity = "-"`），只会走上面「仍要打开」那条路。
-  想彻底不弹：加入 Apple Developer Program（99 美元/年），在 release.yml 里配上 APPLE_* 签名 + 公证。
-- 首次启动：用公司邮箱收登录链接 → 选语言 → 允许通知。之后开机自启、常驻托盘，关闭窗口不会退出（托盘菜单里「退出」才退出）。
-- 共用的打包工位：管理员在「账户与班组」里把该账号的「工位」开关打开，点完成时会先选名字。
-
-### 1.5 以后怎么发新版本（不用再发安装包）
-
-改完代码 → 把 `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 里的版本号一起加一位 → 推 main → 打 tag：
+需要 Node 22。
 
 ```bash
-git tag v0.1.3
-git push origin v0.1.3
-```
-
-已经装了的电脑：应用启动 20 秒后查一次、之后每 6 小时查一次，发现新版本就**在后台下好**，
-顶部出现一条绿色提示「新版本 x.y.z 已下载好 · 重启更新」，员工点一下（或下次自己重启应用）就更新完了。
-也可以在 设置 → 关于 里手动点「检查更新」。更新包是用 `TAURI_SIGNING_PRIVATE_KEY` 签名的，签名对不上不会安装。
-
-只有这几种情况才需要重新发安装包：新同事的新电脑、装的时候选错了位数、或者有人把应用卸载了。
-
-**打 tag 之前一定先 `git log --oneline -1` 看一眼**：最上面那条必须是改了版本号的新提交。tag 打在旧提交上（`git am` 没成功时很容易发生），
-Release 的 latest.json 会写新版本号、挂的却是旧版本的包 —— 已经装了的电脑会一直提示「新版本已下载好 · 重启更新」，装完还是旧的，循环不停。
-真打错了：GitHub → Releases → 那个版本 → Edit → 勾「Set as a pre-release」止血（自动更新只看最新的正式版），然后换下一个版本号重新发。
-
----
-
-## 2. 本地开发
-
-```bash
-cp .env.example .env        # 填 Supabase 地址；留空 = 演示模式
 npm install
-npm run dev                 # 网页版 http://localhost:1420
-npm run tauri dev           # 桌面版（需要 Rust 工具链：https://tauri.app/start/prerequisites/）
-npm run tauri build         # 本机打安装包
+npm run dev            # http://localhost:1420
 ```
 
----
+没有配置服务器时是**演示模式**：内置「示例大学 · 计算机学院」的数据，不连服务器，能看到全部界面（管理员 / 学生 / 共用设备三种身份）。
 
-## 3. 数据与权限一览
+要连一台已经部署好的服务器：复制 `.env.example` 为 `.env`，填上 `VITE_SUPABASE_URL=https://域名/api` 和 anon key（在服务器的 `/config.json` 里能看到）。
 
-| 表 | 用途 | 谁能改 |
-| --- | --- | --- |
-| `teams` | 班组（中 / 德名、颜色） | 管理员 |
-| `profiles` | 成员：主班组、角色（admin / member）、语言、是否工位、是否激活 | 本人改名字 / 语言；管理员改其余 |
-| `profile_teams` | 兼任班组：一个人除主班组外还在哪些班组做事 | 管理员 |
-| `reminders` | 提醒：时间（UTC）、重复规则（RRULE）、提前量、逾期重复、优先级、可见范围、完成方式 | 创建人、管理员 |
-| `reminder_assignees` | 指派给人或班组 | 创建人、管理员 |
-| `completions` | 每次到期的完成记录（工位模式记录选的名字） | 本人写，管理员可删 |
-| `snoozes` | 稍后提醒，只影响自己的设备 | 本人 |
-| `submissions` | 回传文件记录（谁、什么时候、哪个文件）；文件本体在 Storage 私有桶 `submissions`，单文件 ≤ 20 MB | 本人上传；上传人 / 创建人 / 管理员可删 |
-| `reminder_attachments` | 创建人挂在提醒上的附件（照片、PDF、表格）；文件本体在 Storage 私有桶 `attachments`，单文件 ≤ 20 MB | 提醒创建人、管理员（其他人只能看 / 下载） |
-| `discussions` | 讨论：主题、内容、范围（全公司 / 指定班组和人）、截止日期（可不设）、是否已结束和结论；留言数和「最近动静」由数据库触发器维护 | 发起人改 / 结束 / 重开；发起人和管理员可删 |
-| `discussion_members` | 讨论的范围：给人或给班组（兼任也算） | 发起人 |
-| `discussion_comments` | 留言（工位模式记录选的名字） | 能看到讨论的人都能留言（结束后不能）；本人结束前可删，管理员随时可删 |
-| `discussion_files` | 讨论正文和留言的附件；文件本体在 Storage 私有桶 `discussions`，单文件 ≤ 20 MB | 正文附件只有发起人加；留言附件只有留言人加 |
-| `discussion_reads` | 每人在每个讨论里读到哪儿（算未读数） | 本人 |
+电脑客户端：`npm run tauri dev`（要装 Rust 和 Tauri 的系统依赖）。
 
-可见范围由数据库行级权限强制：仅自己 / 本班组 / 全公司；管理员看全部。
-「本班组」算上兼任：主班组 + 兼任班组的提醒都看得到、也会被指派到（`my_team_ids()`）。
-主班组只决定成员卡片的颜色和新建提醒的默认归属。管理员在「设置 → 账户与班组」里，
-点成员那行班组选择框旁边的 `+` 就能加兼任班组。
+### 测试
 
-## 4. 提醒是怎么弹的
+```bash
+npm run test:unit                      # 前端单元测试
+npm run test:ui                        # 界面测试（演示模式；需要 Playwright 浏览器）
+scripts/dev-db/up.sh --db pling_auth_test     # 本机测试库：模拟 Supabase 的角色和 schema，跑完全部迁移
+scripts/dev-db/up.sh --db pling_notify_test
+deno test -A --config supabase/functions/deno.json tests/functions/   # 云函数测试（真的数据库 + 假的微信 / QQ / GoTrue）
+```
 
-- 每台电脑自己按「到期时间 − 提前量」定时弹（系统通知 + 提示音 + 高优先级置顶小窗），**不依赖服务器在线**。
-- 到点没人完成 → 每 30 分钟（可设）再弹，直到有人点完成；任一人完成，其他人的提醒随实时同步消失。
-- 免打扰时段（默认 18:30–07:00 和周末）不弹；上班后补发 12 小时内错过的。
-- 重复提醒按 Europe/Berlin 本地时间展开，夏令时切换不受影响；黑森州法定假日自动跳过。
-- 断网时可以看缓存、点完成（排队），联网后自动同步（上传文件除外，需要联网）。
+改了 `src/lib/{types,holidays,recurrence,occurrences}.ts` 以后运行 `npm run sync:core`，把展开逻辑同步给云函数（CI 会检查两边一致）。
 
-## 4a. 让大家填表格 / 交文件
+## 部署
 
-- **关联链接**可以放多条：新建提醒时每行一个，可写「名称 链接」，比如 `盘点表模板 https://…`；Notion 表单、在线表格、WMS 页面都行。详情里点一下就在浏览器打开。
-- 勾上 **需要回传文件**：被指派的人必须上传填好的表格 / 照片才能点完成（手机网页版可以直接拍照）。
-  详情页列出谁交了什么、什么时候，「每人各自完成」模式下还会显示**未交名单**；创建人 / 管理员可以**全部下载**（打成一个 zip，文件名前面带人名）。
-- 工位共用电脑：先选文件，再选是谁，文件就记在那个人名下。
-- 文件存在 Supabase Storage 私有桶里，下载用 10 分钟有效的签名链接；权限跟提醒的可见范围一致。
+见 [docs/部署指南.md](docs/部署指南.md)。简单说：服务器装好 Docker，解开 `pling-server-<版本>.tar.gz`，运行 `deploy/scripts/install.sh`。
+微信 / QQ / 群机器人怎么申请见 [docs/申请指南.md](docs/申请指南.md)。
 
-## 4a+. 附件（v0.4.0）
+## 发版
 
-- **新建 / 编辑提醒**时可以挂附件：照片、PDF、表格都行，一次选多个，也可以分几次加；每个文件右上角 × 去掉。
-  编辑时点掉旧附件只是标记，点「保存」才真的删，点「取消」什么都不动。
-- **详情页**：照片排成缩略图，点开看大图（左右翻、手机左右滑、Esc / 返回键关）；其他文件一行一个，点了下载。
-  创建人和管理员在详情里也能直接「添加文件」、删附件；其他人只能看和下载（数据库权限也是这么设的）。
-- **交文件完成**也改成先进托盘：点「选择要交的文件」→ 选好的文件列出来（可以继续添加、拍照、去掉）→「提交并完成（N 个文件）」。
-  没传成功文件会留在托盘里，直接再点一次。工位模式点提交后照样先选人。
-- **普通提醒**（没勾「需要回传」）的「标记完成」下面多了一个「附上照片 / 文件再完成」，比如拍一张装好的托盘再完成。
-- **照片自动压缩**：长边超过 2560px 的照片上传前在本机等比缩到 2560px、存成 JPEG（质量 0.85），一张手机照片从 4–5 MB 变成 1 MB 左右，
-  标签和单据上的字照样清楚。PDF、Excel 等原样上传；压完反而更大、或者浏览器解不了（比如 Chrome 里的 HEIC）也原样上传。
-- 需要联网（附件不进断网队列）。前端在 0005 迁移之前上线也不会坏：附件表不存在时当作没有附件。
+1. 改版本号：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`（还有 `src-tauri/Cargo.lock` 里 `pling` 那一项）
+2. 提交、推到 `main`，等 CI 绿
+3. 打标签并推送：`git tag v0.2.0 && git push origin v0.2.0`。打之前先 `git log -1` 确认标签打在想要的提交上
+4. GitHub Actions 会构建：
+   - 电脑客户端：Windows 64 / 32 位、macOS 通用包
+   - 自动更新清单：`latest.json`（三个平台都齐才算成功）
+   - 服务器安装包：`pling-server-<版本>.tar.gz` 和 `.sha256`
+5. 通知各机构：服务器运行 `deploy/scripts/update.sh 0.2.0`，客户端运行 `deploy/scripts/update-desktop.sh 0.2.0`
 
-## 4a++. 讨论（v0.5.0）
+自动更新的签名私钥在仓库 Secrets（`TAURI_SIGNING_PRIVATE_KEY`），公钥在 `tauri.conf.json`。**私钥丢了，已经装好的客户端就再也收不到更新**，务必另外备份。
 
-- 左边栏 / 手机底栏多了 **讨论**：谁都可以「发起讨论」——写主题和内容，挂照片、PDF、表格（一次多个，照片照样压到 2560px）。
-- **谁能看到**和提醒一样选：**全公司**，或者**指定班组 / 人**（点班组、输入姓名加人；兼任班组也算）。
-  能看到的人都能在下面**留言**，留言也能带附件；管理员能看到所有讨论。
-- **只有发起人能结束讨论**：点「结束讨论」，可以写一句结论 → 讨论变**只读**（不能再留言、不能改），结论显示在最上面；
-  发起人随时可以「重新打开」，再结束时上次的结论会带出来。发起人在结束前还能编辑主题、内容、范围和附件，也能删掉整个讨论；
-  管理员能删任何讨论和留言，但不能替别人结束。
-- **新留言不弹通知**，只在「讨论」入口上显示未读数（有几个讨论有新动静）；列表里每个讨论显示几条新留言，从没打开过的标「新」。
-  打开讨论会自动跳到第一条新留言，前面有一条「新留言」分隔线。读到哪儿存在服务器上，手机上看过、电脑上的数字也会消失。
-- 工位账号（共用电脑）留言 / 发起讨论时要选一下自己的名字，每条都重新选。
-- 留言只自动加载最近 120 天的；更早的讨论打开后点「查看更早的 N 条留言」。
-- 需要联网。前端在 0006 迁移之前上线也不会坏：讨论页会提示先让管理员跑迁移，提醒的实时同步也不受影响。
+## 来历
 
-## 4a+++. 讨论放进日历（v0.6.0）
+从「DZF 提醒」v0.6.2（一个仓库团队内部用的提醒应用）分出来，改成通用版：
 
-- 发起 / 编辑讨论时可以选一个**截止日期**（可以不设）：快捷选「明天 / 这周五 / 下周五」，或者在日期框里选任意一天。
-- 设了截止日期的讨论会出现在**日历那一天的最上面**（像全天事项）：空心卡片、讨论图标，写着「截止 / 今天截止 / 已过截止」、范围、发起人、留言数和未读。
-  点一下直接打开这个讨论；关掉（× / 左上角返回 / 安卓返回键）回到日历。已结束的讨论显示成已完成的样子；没设日期的不进日历。
-- **到期不弹提醒**，只在日历里显示。日历顶上的筛选同样管讨论：「指派给我」= 我在范围里（全公司的、我发起的、点了我或我的班组的）；
-  「班组」= 范围里有这个班组，或者是这个班组的人发起的。只显示自己能看到的讨论。
-- 电脑上左边的迷你月历在截止那天点一个深色小点（过了还没结束的是红点）；「今天」列表里列出今天截止的讨论。
-- 讨论列表里进行中的讨论带「10月2日截止」，详情里发起人那一行后面有截止日期，过了还没结束的标红；点它跳到日历的那一天。
-- 改截止日期也算一次「动静」（别人会看到未读）；讨论结束后和别的内容一样不能再改，重新打开后可以改。
-- 数据库：`0007_discussion_due_date.sql` 给 `discussions` 加了 `due_date`（日期，柏林本地）。前端在 0007 之前上线也不会坏：
-  不设截止日期照常发起 / 编辑；设了会提示先让管理员跑迁移。v0.5.0 的旧版本客户端编辑讨论不会把截止日期清掉。
-
-## 4a++++. 日期 / 时间选择（v0.6.2）
-
-- 新建 / 编辑提醒、讨论的截止日期、设置里的免打扰时段：日期和时间都换成应用自己画的选择器。
-  点日期框弹出月历（周一开头，今天有红框，黑森州法定假日下面有虚线，底部「今天 / 明天」）；点时间框弹出整点和半点的格子（早 6 点到晚 9 点半）。
-- 以前用的是浏览器自带的日期 / 时间框：在 Mac（Safari 和桌面版）上没有日历和时钟小图标，时间框根本没有选择面板，日期面板也常常点了不出来。现在各平台都一样。
-- 时间也可以直接敲：16:30、1630、16.30、16：30（中文冒号）、930、9 都认；↑ / ↓ 每次加减 15 分钟；敲错了（比如 25:99）会回到原来的时间。
-- 键盘：日期框回车打开，方向键按天 / 按周移动，PageUp / PageDown 换月，回车选中；Esc 只关选择器，不关弹窗。
-- 顺手修：新建 / 编辑提醒时，后台一同步（别人完成了提醒、Notion 同步）表单就会被冲回默认值或旧值，填到一半的时间和指派会突然变掉。现在表单只在打开时填一次。
-
-## 4b. 手机上用（PWA）
-
-- 浏览器打开网址 → 「添加到主屏幕」，之后跟装了个 App 一样：全屏、有图标、能离线看缓存。
-- 底部五个页签（今天 / 看板 / 讨论 / 设置 / 我的）；iPhone 全屏模式下会自动避开状态栏和底部小横条。
-- **安卓返回键**：先关掉当前打开的详情 / 讨论 / 弹窗 / 大图，全关完了再按才退出应用。
-- 列表往下拽不会触发浏览器刷新（在 PWA 里刷新等于重启应用）。
-- 网页版有新版本时，关掉应用再打开就会自动换成新的（service worker `autoUpdate`）。
-
-## 4c. 皮肤
-
-设置 → 通用 → **皮肤**，每台设备各自选（存在本机，跟语言、提醒音一样），同事那边不受影响；桌面版的置顶提醒小窗会跟着换。
-
-| 皮肤 | 样子 | 来源 |
-| --- | --- | --- |
-| DZF（默认） | 暖灰底、黑色主按钮、Archivo | 原来的样子，一个像素都没变 |
-| opencode.ai | 奶白底、全等宽字体（JetBrains Mono）、4px 小圆角、细线代替阴影 | `npx getdesign@latest add opencode.ai` |
-| Notion | 暖白纸面、Inter、蓝色主按钮 | `npx getdesign@latest add notion` |
-| Popcart | 冷灰 + 品牌红主按钮、胶囊按钮、大圆角、Fredoka 标题 + Figtree 正文 | 自己在 Claude Design 里做的 Popcart Design System |
-
-- 所有颜色 / 圆角 / 字体都是 `src/styles.css` 里 `:root` 的 CSS 变量，皮肤只在 `src/skins.css` 里覆盖它们；圆角统一乘 `--rs`。
-- 字体从 npm 的 `@fontsource/*` 打包进应用（只要拉丁子集，一共约 300 KB），离线、桌面版都能用；中文回落 Noto Sans SC。
-- 原始的 DESIGN.md 在 `design/skins/`，再加一套的步骤见 `design/skins/README.md`。
-- 注意 Popcart 的主色和「逾期」都是同一个红（它的系统里 brand-primary = danger），看惯了默认皮肤的人要适应一下。
-
-## 5. Notion「到柜登记表」自动同步
-
-入库组在 Notion 里维护的到柜登记表会自动变成提醒（`supabase/functions/sync-notion-containers`）：
-
-- 状态 = **已预约** 的每一柜 → 一条提醒，到柜时段到点、提前 30 分钟提醒、逾期每 60 分钟再提；**可见范围是全公司**（谁都能看到今天到几个柜），指派给整个入库组；点开有 Notion 那一行的链接
-- 每个有到柜的日期 → 前一个工作日 16:00 一条「明天到柜 N 柜」汇总
-- 表里改日期 / 时段 / 信息 → 提醒跟着改；状态改成 **已卸柜** → 自动完成（完成人显示 `Notion · 已卸柜`）；**改期 / 取消 / 爽约** → 自动消失
-- 卡片和详情上带 `Notion` 标记；在应用里改这类提醒会被下次同步覆盖，请在 Notion 里改
-- 定时同步只看最近 7 天起的行；要把更早的历史（已卸柜的柜）补成已完成记录，手动 POST 一次带 `{"since":"2026-08-01"}` 的请求即可（见下面第 5 步），重复跑不会重复建
-
-部署（一次性）：
-
-1. Notion：https://www.notion.so/profile/integrations → New integration（类型 Internal，验证方式「访问令牌」）→ 复制 `ntn_…` 密钥；到「到柜登记表」页面 `···` → Connections → 加上这个集成。
-2. Supabase → SQL Editor 跑 `supabase/migrations/0002_sync_source.sql`。
-3. Supabase → Edge Functions → 新建函数 `sync-notion-containers`，把 `supabase/functions/sync-notion-containers/index.ts` 贴进去部署，**关闭 Verify JWT**；
-   Secrets 里加 `NOTION_TOKEN`（第 1 步的密钥）、`SYNC_SECRET`（随便一串长口令）、可选 `NOTION_DATABASE_ID`。
-4. SQL Editor 跑 `supabase/cron.sql`（先把里面的 `<PROJECT_REF>` 和 `<SYNC_SECRET>` 换掉）→ 之后每 15 分钟同步一次。
-5. 手动跑一次验证：`curl -X POST https://<ref>.supabase.co/functions/v1/sync-notion-containers -H "x-sync-secret: <SYNC_SECRET>"`，
-   返回 `{"ok":true,"created":…}`；`select * from sync_runs order by id desc` 能看到日志。
-   补历史：同样的请求加 `-H "Content-Type: application/json" -d '{"since":"2026-08-01"}'`（或在 SQL Editor 里用 `net.http_post` 发，参考 `supabase/cron.sql`）。
-
-## 6. 以后可加
-
-- 承运商时刻表（设置里一张表自动生成每天的截单 / 取件提醒）——现在先用「新建提醒」里的承运商模板手动建。
-- 手机推送（Supabase Cron + Web Push）。
-- 与 EC-WMS 联动。
+- 去掉：Notion 同步、承运商模板、德语界面
+- 新增：多种登录方式、服务端推送、已读回执、作业统计、邀请码、机构设置、国内节假日
+- 部署：从 Supabase 云 + Vercel 改成每家自托管

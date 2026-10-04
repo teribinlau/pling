@@ -1,9 +1,10 @@
-# 每次推送都做类型检查和网页构建，保证主分支可用
+# 每次推送：网页（类型检查、单元测试、构建）+ 数据库迁移（跑两遍，验证可以重复执行）+ 云函数测试
 name: ci
 on:
   push:
     branches: [main]
   pull_request:
+
 jobs:
   web:
     runs-on: ubuntu-latest
@@ -14,5 +15,53 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: 云函数用的展开逻辑和前端一致
+        run: node scripts/sync-core.mjs --check
       - run: npm run typecheck
+      - run: npm run test:unit
       - run: npx vite build
+
+  server:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: '5432'
+      PGUSER: postgres
+    steps:
+      - uses: actions/checkout@v5
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: 建测试库，迁移跑两遍
+        run: |
+          for db in pling_ci pling_auth_test pling_notify_test; do
+            createdb "$db"
+            psql -q -v ON_ERROR_STOP=1 -d "$db" -f scripts/dev-db/bootstrap.sql
+            for round in 1 2; do
+              for f in supabase/migrations/*.sql; do psql -q -v ON_ERROR_STOP=1 -d "$db" -f "$f" > /dev/null; done
+            done
+          done
+      - name: 部署脚本语法
+        run: |
+          for f in deploy/scripts/*.sh scripts/*.sh scripts/dev-db/*.sh; do bash -n "$f"; done
+          sh -n deploy/web/entrypoint/19-pling.sh
+      - name: 云函数类型检查
+        run: deno check --config supabase/functions/deno.json supabase/functions/*/index.ts
+      - name: 云函数测试
+        env:
+          PLING_AUTH_TEST_DB: postgres://postgres@127.0.0.1:5432/pling_auth_test
+          PLING_NOTIFY_TEST_DB: postgres://postgres@127.0.0.1:5432/pling_notify_test
+        run: deno test -A --config supabase/functions/deno.json tests/functions/
+      - name: 数据库权限测试
+        if: hashFiles('tests/db/*.test.mjs') != ''
+        env:
+          PLING_DB_TEST_URL: postgres://postgres@127.0.0.1:5432/pling_ci
+        run: npm ci && node --test tests/db/

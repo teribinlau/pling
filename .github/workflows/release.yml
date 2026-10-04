@@ -1,10 +1,13 @@
-# 打 tag（例如 v0.1.0）就自动构建 Windows（64 位 + 32 位）/ macOS 安装包并发布到 GitHub Releases，
-# 同时生成 tauri-plugin-updater 需要的 latest.json，已装的电脑会自动更新。
+# 打 tag（例如 v0.1.0）就自动发布一个版本到 GitHub Releases：
+#   - 电脑客户端：Windows 64 位 / 32 位、macOS 通用包，以及自动更新清单 latest.json
+#   - 服务器安装包：pling-server-<版本>.tar.gz（网页 + 云函数 + 数据库迁移 + 部署脚本）和 .sha256
+# 客户端和网页都不内置服务器地址（每家机构一套服务器，连接信息由服务器的 /config.json 提供），
+# 所以同一套安装包所有机构通用。各机构用 deploy/scripts/update-desktop.sh 把客户端放到自己的服务器上，
+# 已装的电脑从那里自动更新（latest.json 里的下载地址会被改成机构自己的域名）。
 #
 # 需要在仓库 Settings → Secrets 里配置：
-#   VITE_SUPABASE_URL           Supabase 项目地址
-#   VITE_SUPABASE_ANON_KEY      Supabase anon key（公开 key，可以打进客户端）
-#   TAURI_SIGNING_PRIVATE_KEY   `npx tauri signer generate -w ~/.tauri/dzf.key` 生成的私钥内容
+#   TAURI_SIGNING_PRIVATE_KEY   `npx tauri signer generate -w ~/.tauri/pling.key` 生成的私钥内容
+#                               （对应的公钥写在 src-tauri/tauri.conf.json 的 plugins.updater.pubkey）
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  上一步设置的密码（没设就留空）
 # 可选（macOS 签名 + 公证，没有的话 mac 用户首次要去 系统设置 → 隐私与安全性 → 仍要打开）：有了 Apple 开发者账号后，
 # 在下面 tauri-action 的 env 里加上 APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_SIGNING_IDENTITY /
@@ -30,7 +33,7 @@ jobs:
           - platform: windows-latest
             args: ''
             targets: ''
-          # Windows 32 位（仓库里的老机器）
+          # Windows 32 位（学校机房、办公室里的老电脑）
           - platform: windows-latest
             args: '--target i686-pc-windows-msvc'
             targets: 'i686-pc-windows-msvc'
@@ -60,18 +63,17 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_APP_VERSION: ${{ github.ref_name }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'DZF 提醒 ${{ github.ref_name }}'
+          releaseName: '叮一下 Pling ${{ github.ref_name }}'
           releaseBody: |
-            新装电脑下载 `-setup.exe`（64 位机器选 `x64`，32 位机器选 `x86`）；macOS 下载 `.dmg`，
-            拖进「应用程序」后第一次打开会被拦：系统设置 → 隐私与安全性 → 拉到底点「仍要打开」。
-            已经装过的电脑不用管：应用启动时会自己下载新版本，顶部提示一下重启就更新好了。
+            **服务器**：`pling-server-*.tar.gz`，新装看 docs/部署指南.md，升级运行 `deploy/scripts/update.sh 版本号`。
+            **电脑客户端**：一般不用从这里下载 —— 在服务器上运行 `deploy/scripts/update-desktop.sh 版本号`，
+            大家从机构自己的 `https://域名/downloads/` 下载，已装的电脑会自动更新。
+            Windows 选 `-setup.exe`（64 位 `x64`，32 位 `x86`）；macOS 第一次打开会被拦：系统设置 → 隐私与安全性 → 仍要打开。
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
@@ -90,3 +92,23 @@ jobs:
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: bash .github/scripts/make-latest-json.sh
+
+  # 服务器安装包：网页（不带任何服务器地址）+ 云函数 + 迁移 + 部署脚本
+  server:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 打包
+        env:
+          VITE_APP_VERSION: ${{ github.ref_name }}
+        run: bash scripts/package-server.sh
+      - name: 上传到 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" release/pling-server-*.tar.gz release/pling-server-*.tar.gz.sha256 --repo "${{ github.repository }}" --clobber

@@ -22,7 +22,7 @@ echo "本次 Release 的资产："
 cat assets.txt
 
 jq -n --arg v "$VERSION" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  '{version: $v, notes: "在设置 → 关于里可以看版本号。", pub_date: $d, platforms: {}}' > latest.json
+  '{version: $v, notes: "叮一下新版本：在「设置 → 关于」里可以看版本号和更新内容。", pub_date: $d, platforms: {}}' > latest.json
 
 pick() { grep -m1 -E "$1" assets.txt || true; }
 
