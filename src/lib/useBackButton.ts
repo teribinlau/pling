@@ -48,7 +48,7 @@ export function useBackButton(): void {
 
   useEffect(() => {
     if (layers > depth.current) {
-      for (let i = depth.current; i < layers; i++) window.history.pushState({ dzfLayer: i + 1 }, '');
+      for (let i = depth.current; i < layers; i++) window.history.pushState({ plingLayer: i + 1 }, '');
       depth.current = layers;
     } else if (layers < depth.current) {
       const n = depth.current - layers;

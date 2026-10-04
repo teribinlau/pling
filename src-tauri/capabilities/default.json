@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "DZF 提醒主窗口和置顶小窗的权限",
+  "description": "叮一下主窗口和置顶小窗的权限（自动更新走 lib.rs 里自己的命令，不用插件的 JS 接口）",
   "windows": ["main", "alert"],
   "permissions": [
     "core:default",
@@ -15,7 +15,6 @@
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
-    "updater:default",
     "process:allow-restart",
     "os:default",
     "opener:default"

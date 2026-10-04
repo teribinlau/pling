@@ -1,14 +1,13 @@
 // 本地通知调度：每台电脑自己按时弹，不依赖服务器在线。
 // 三个阶段：pre（提前量）→ due（到点）→ overdue（逾期后每 N 分钟重复），每个阶段每次到期只弹一次。
-import { useStore } from './store';
+import { effectiveNotifyPrefs, useStore } from './store';
 import { buildOccurrences, canSee, concernsMe, teamName } from './occurrences';
 import { isTauri, playChime, sendSystemNotification, setTrayBadge, showAlertWindow } from './tauri';
-import { localHm } from './recurrence';
-import { toZonedTime } from 'date-fns-tz';
-import { TZ, type Occurrence, type Settings } from './types';
+import { inQuietTime, localHm } from './recurrence';
+import type { NotifyPrefs, Occurrence } from './types';
 import i18n from '../i18n';
 
-const FIRED_KEY = 'dzf-reminder-fired-v1';
+const FIRED_KEY = 'pling-fired-v1';
 
 function loadFired(): Record<string, number> {
   try {
@@ -26,28 +25,16 @@ function saveFired(m: Record<string, number>) {
   localStorage.setItem(FIRED_KEY, JSON.stringify(pruned));
 }
 
-function hmToMinutes(hm: string): number {
-  const [h, m] = hm.split(':').map(Number);
-  return h * 60 + m;
-}
-
-/** 当前是否处于免打扰时段（按柏林时间） */
-export function inDnd(settings: Settings, now = new Date()): boolean {
-  if (!settings.dndEnabled) return false;
-  const z = toZonedTime(now, TZ);
-  if (settings.dndWeekend && (z.getDay() === 0 || z.getDay() === 6)) return true;
-  const cur = z.getHours() * 60 + z.getMinutes();
-  const from = hmToMinutes(settings.dndFrom);
-  const to = hmToMinutes(settings.dndTo);
-  if (from === to) return false;
-  return from < to ? cur >= from && cur < to : cur >= from || cur < to;
+/** 现在是不是免打扰：和服务器推送用同一份设置（notify_prefs）、同一个判断（inQuietTime，按机构时区、含节假日 / 调休） */
+export function inDnd(p: NotifyPrefs, now = new Date()): boolean {
+  return inQuietTime({ enabled: p.dnd_enabled, from: p.dnd_from, to: p.dnd_to, restDays: p.dnd_rest_days }, now);
 }
 
 async function fire(o: Occurrence, stage: 'pre' | 'due' | 'overdue') {
   const st = useStore.getState();
   const { settings, teams } = st;
   const team = teams.find((t) => t.id === o.reminder.team_id);
-  const tName = teamName(team, settings.lang);
+  const tName = teamName(team);
   const time = localHm(o.at);
   const stageLabel =
     stage === 'pre'
@@ -99,7 +86,7 @@ export function startScheduler(): () => void {
     void setTrayBadge(overdueCount);
 
     const muted = st.mutedUntil && st.mutedUntil > now;
-    if (muted || inDnd(st.settings, now)) return;
+    if (muted || inDnd(effectiveNotifyPrefs(st.notifyPrefs, st.session.userId), now)) return;
 
     let changed = false;
     for (const o of mine) {

@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { useStore } from '../lib/store';
 import { useOccurrences } from '../lib/useData';
 import { useDueDiscussions } from '../lib/useDiscussions';
-import { localYmd } from '../lib/recurrence';
+import { localHm, localYmd } from '../lib/recurrence';
+import { holidayOn } from '../lib/holidays';
 import { dayDiff, isoWeek, monthLabel, todayYmd, weekdayOf, zoned } from '../lib/format';
 import { ReminderCard } from './ReminderCard';
 import { DiscussionDueCard } from './DiscussionDueCard';
@@ -20,7 +21,7 @@ export function AgendaView() {
   const teams = useStore((s) => s.teams);
   const filter = useStore((s) => s.filter);
   const setFilter = useStore((s) => s.setFilter);
-  const lang = useStore((s) => s.settings.lang);
+  useStore((s) => s.holidays); // 节假日变了要重画（休 / 班 和节日名）
 
   const startYmd = localYmd(anchor);
   const from = useMemo(() => new Date(new Date(startYmd + 'T00:00:00Z').getTime() - 3 * 3600000), [startYmd]);
@@ -79,11 +80,7 @@ export function AgendaView() {
     };
   }, [startYmd, occs.length, dueByDay.size]);
 
-  const dateLabel = (ymd: string) => {
-    const m = Number(ymd.slice(5, 7));
-    const d = Number(ymd.slice(8, 10));
-    return lang.startsWith('de') ? `${d}.${m}.` : `${m}.${d}`;
-  };
+  const dateLabel = (ymd: string) => `${Number(ymd.slice(5, 7))}.${Number(ymd.slice(8, 10))}`;
 
   return (
     <section className="main">
@@ -116,7 +113,7 @@ export function AgendaView() {
             <option value="">{t('filters.team')}</option>
             {teams.map((tm) => (
               <option key={tm.id} value={`team:${tm.id}`}>
-                {lang.startsWith('de') ? tm.name_de : tm.name_zh}
+                {tm.name}
               </option>
             ))}
           </select>
@@ -129,17 +126,28 @@ export function AgendaView() {
           const dues = dueByDay.get(ymd) ?? [];
           const diff = dayDiff(ymd, today);
           const wd = weekdayOf(ymd);
-          const isWeekend = wd === 0 || wd === 6;
+          const hol = holidayOn(ymd);
+          const isOff = hol?.kind === 'off';
+          const isMakeup = hol?.kind === 'work';
+          const isWeekend = (wd === 0 || wd === 6) && !isMakeup;
           const dayNum = Number(ymd.slice(8, 10));
           // 当前时间线的位置：插在第一条未来提醒之前
           let nowInserted = false;
           return (
-            <section key={ymd} data-ymd={ymd} className={`day-section ${diff === 0 ? 'today' : diff < 0 ? 'past' : ''}`}>
+            <section key={ymd} data-ymd={ymd} className={`day-section ${diff === 0 ? 'today' : diff < 0 ? 'past' : ''} ${isOff ? 'off-day' : ''} ${isMakeup ? 'makeup-day' : ''}`}>
               <div className="day-num">
                 <span className="n">{dayNum}</span>
                 <span className="wd">
-                  {t(`weekdaysLong.${wd}`)}
+                  <span className="wd-top">
+                    {t(`weekdaysLong.${wd}`)}
+                    {hol && (
+                      <i className={`hday ${isOff ? 'off' : 'work'}`} title={isOff ? t('holidays.off') : t('holidays.work')}>
+                        {isOff ? t('holidays.badgeOff') : t('holidays.badgeWork')}
+                      </i>
+                    )}
+                  </span>
                   <small>{diff === 0 ? t('time.today') : diff === 1 ? t('time.tomorrow') : diff === -1 ? t('time.yesterday') : dateLabel(ymd)}</small>
+                  {hol?.name && <small className="hday-name">{isMakeup ? t('holidays.makeup', { name: hol.name }) : hol.name}</small>}
                 </span>
               </div>
               <div className="day-cards">
@@ -148,8 +156,8 @@ export function AgendaView() {
                 ))}
                 {list.length === 0 && dues.length === 0 && (
                   <div className="empty-day">
-                    {isWeekend ? <IconMoon size={18} /> : null}
-                    {isWeekend ? t('groups.weekendQuiet') : t('groups.empty')}
+                    {isWeekend || isOff ? <IconMoon size={18} /> : null}
+                    {isOff ? t('groups.holidayQuiet', { name: hol?.name ?? '' }) : isWeekend ? t('groups.weekendQuiet') : t('groups.empty')}
                   </div>
                 )}
                 {list.map((o) => {
@@ -162,7 +170,7 @@ export function AgendaView() {
                         <span className="dot" />
                         <span className="line" />
                         <span className="lbl">
-                          {now.toLocaleTimeString(lang, { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })} · {mins > 90 ? t('time.inHours', { n: Math.round(mins / 60) }) : t('time.nextIn', { n: mins })}
+                          {localHm(now)} · {mins > 90 ? t('time.inHours', { n: Math.round(mins / 60) }) : t('time.nextIn', { n: mins })}
                         </span>
                       </div>
                     );

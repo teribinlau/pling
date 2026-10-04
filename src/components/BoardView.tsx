@@ -14,7 +14,6 @@ export function BoardView() {
   const teams = useStore((s) => s.teams);
   const filter = useStore((s) => s.filter);
   const setFilter = useStore((s) => s.setFilter);
-  const lang = useStore((s) => s.settings.lang);
 
   const now = new Date();
   const from = useMemo(() => new Date(now.getTime() - 30 * 86400000), [now.getDate()]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -63,7 +62,7 @@ export function BoardView() {
           {teams.map((tm) => (
             <button key={tm.id} className={`chip ${filter === `team:${tm.id}` ? 'active' : ''}`} onClick={() => setFilter(`team:${tm.id}`)}>
               <span className="dot" style={{ background: tm.color, width: 8, height: 8 }} />
-              {lang.startsWith('de') ? tm.name_de : tm.name_zh}
+              {tm.name}
             </button>
           ))}
         </div>

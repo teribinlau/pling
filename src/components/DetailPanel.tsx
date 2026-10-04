@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useStore } from '../lib/store';
 import { useOccurrences, useSelected } from '../lib/useData';
-import { hasSubmitted, missingSubmitters, resolveAssignees, teamName } from '../lib/occurrences';
+import { resolveAssignees, teamName } from '../lib/occurrences';
+import { hasValidHomework, isSubmissionOf, personHomework, uploadRequiredFor } from '../lib/homework';
 import { beforeLabel, dateLabel, hm, relativeLabel, repeatLabel, whenLabel } from '../lib/format';
 import { localYmd } from '../lib/recurrence';
 import { linkTitle, parseLinks } from '../lib/links';
@@ -12,12 +13,12 @@ import { Avatar } from './Avatar';
 import { IconCheck, IconDownload, IconEdit, IconExternal, IconPaperclip, IconTrash, IconUpload, IconX } from './Icons';
 import { FileGallery } from './FileGallery';
 import { FileTray } from './FileTray';
-
+import { HomeworkPanel, MyHomework, ReadReceipts, useAudience, useCanReview } from './ReminderInsights';
 
 export function DetailPanel() {
   const { t } = useTranslation();
   const now = new Date();
-  const from = useMemo(() => new Date(now.getTime() - 30 * 86400000), [now.getDate()]); // eslint-disable-line react-hooks/exhaustive-deps
+  const from = useMemo(() => new Date(now.getTime() - 62 * 86400000), [now.getDate()]); // eslint-disable-line react-hooks/exhaustive-deps
   const to = useMemo(() => new Date(now.getTime() + 60 * 86400000), [now.getDate()]); // eslint-disable-line react-hooks/exhaustive-deps
   const occs = useOccurrences(from, to, false, true);
   const o = useSelected(occs);
@@ -27,8 +28,6 @@ export function DetailPanel() {
   const memberships = useStore((s) => s.memberships);
   const completions = useStore((s) => s.completions);
   const me = useStore((s) => s.me);
-  const session = useStore((s) => s.session);
-  const lang = useStore((s) => s.settings.lang);
   const requestComplete = useStore((s) => s.requestComplete);
   const uncomplete = useStore((s) => s.uncomplete);
   const snooze = useStore((s) => s.snooze);
@@ -45,7 +44,10 @@ export function DetailPanel() {
   const repo = useStore((s) => s.repo);
   const pushToast = useStore((s) => s.pushToast);
   const select = useStore((s) => s.select);
+  const markRead = useStore((s) => s.markRead);
   const mobileOpen = useStore((s) => s.mobileDetailOpen);
+  const canReview = useCanReview(o);
+  const audience = useAudience(o);
 
   const completeInput = useRef<HTMLInputElement>(null);
   const moreInput = useRef<HTMLInputElement>(null);
@@ -63,6 +65,23 @@ export function DetailPanel() {
   useEffect(() => {
     void isMacDesktop().then((mac) => setCanZip(!mac));
   }, []);
+
+  // 已读回执：详情打开、窗口在前台且有焦点才算看过（托盘里挂着、切到别的窗口都不算）
+  useEffect(() => {
+    if (!o) return;
+    const target = o;
+    const mark = () => {
+      if (document.visibilityState === 'visible' && document.hasFocus()) markRead(target);
+    };
+    mark();
+    window.addEventListener('focus', mark);
+    document.addEventListener('visibilitychange', mark);
+    return () => {
+      window.removeEventListener('focus', mark);
+      document.removeEventListener('visibilitychange', mark);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [oKey, markRead]);
 
   if (!o) {
     return (
@@ -84,25 +103,29 @@ export function DetailPanel() {
     .sort((a, b) => new Date(b.occurrence_at).getTime() - new Date(a.occurrence_at).getTime())
     .slice(0, 6);
   // 重复提醒：补上最近几次「未完成」的记录
-  const missed = r.rrule
-    ? occs.filter((x) => x.reminder.id === r.id && x.at < now && !x.completion && x.key !== o.key).slice(-3)
-    : [];
+  const missed = r.rrule ? occs.filter((x) => x.reminder.id === r.id && x.at < now && !x.completion && x.key !== o.key).slice(-3) : [];
   const rows = [
     ...history.map((c) => ({ key: c.id, at: new Date(c.occurrence_at), ok: true, who: c.completed_by_name || profiles.find((p) => p.id === c.completed_by)?.name || '', time: hm(new Date(c.completed_at)) })),
     ...missed.map((x) => ({ key: x.key, at: x.at, ok: false, who: '', time: '' })),
   ]
     .sort((a, b) => b.at.getTime() - a.at.getTime())
     .slice(0, 6);
-  const assigneeLabel = assignedTeams.length
-    ? assignedTeams.map((tm) => t('detail.wholeTeam', { team: teamName(tm, lang) })).join(' · ')
-    : t('detail.people', { n: people.length });
+  const assigneeLabel = assignedTeams.length ? assignedTeams.map((tm) => t('detail.wholeTeam', { name: teamName(tm) })).join(' · ') : t('detail.people', { n: people.length });
 
-  // 回传文件
-  const showSubmissions = r.require_upload || o.submissions.length > 0;
-  const mine = session ? hasSubmitted(o, session.userId) : false;
-  const missing = r.require_upload && r.completion_mode === 'each' ? missingSubmitters(o, people) : [];
+  // ---- 回传文件 / 作业 ----
+  const isStation = !!me?.is_station;
+  const homework = r.require_upload;
+  // 我要不要交：受众里的人（学生）、共用设备要交；布置作业的老师（创建人 / 管理员，不在受众里）不用交
+  const mustUpload = !!me && uploadRequiredFor(r, me, audience);
+  // 我自己（普通成员）这一次的作业：被退回的不算交过，要重交
+  const myHw = me && !isStation ? personHomework(o.submissions.filter((s) => isSubmissionOf(s, me)), o.at) : null;
+  const mine = me ? hasValidHomework(o, me) : false;
   const subName = (s: Submission) => s.uploaded_by_name || profiles.find((p) => p.id === s.uploaded_by)?.name || '';
   const canDeleteSub = (s: Submission) => !!me && (s.uploaded_by === me.id || me.role === 'admin' || r.created_by === me.id);
+  // 普通提醒附带的文件：大家都能看；需要回传的：共用设备看整个小组谁交了（按名字对），创建人 / 管理员看统计
+  const showAllFiles = !homework ? o.submissions.length > 0 : isStation && !canReview;
+  // 未交名单跟老师那边的统计用同一个受众（不含布置作业的人自己）
+  const stationMissing = homework && isStation && r.completion_mode === 'each' ? audience.filter((p) => !hasValidHomework(o, p)) : null;
 
   // 第一次选文件必须在按钮的点击里直接弹（iPhone Safari 不允许别处弹文件选择），选完进托盘
   const takeFiles = (input: HTMLInputElement | null, mode: 'complete' | 'more') => {
@@ -119,8 +142,8 @@ export function DetailPanel() {
   };
   const submitStash = async () => {
     if (!stash.length) return;
-    // 工位模式：先选是谁，文件交给选人弹窗一起传（已完成的话只是多传一份）
-    if (me?.is_station) {
+    // 共用设备：先选是谁，文件交给选人弹窗一起传（已完成的话只是多传一份）
+    if (isStation) {
       requestComplete(o, stash);
       clearStash();
       return;
@@ -172,9 +195,12 @@ export function DetailPanel() {
       setZipping(false);
     }
   };
+  // 还能补交：已经完成了、交过（没被退回）、或者是普通提醒；交作业的人被通过了就不用再交
+  const canUploadMore = !stashMode && (!!o.completion || mine || !homework) && myHw?.status !== 'accepted' && !(homework && isStation);
+  const showMyFilesBlock = homework && !!myHw && !canReview && myHw.status !== 'missing';
 
   return (
-    <aside className={`detail ${mobileOpen ? 'open' : ''}`}>
+    <aside className={`detail ${mobileOpen ? 'open' : ''}`} aria-label={t('detail.title')}>
       <div className="head">
         <span className="kicker">{t('detail.title')}</span>
         {canEdit && (
@@ -200,7 +226,7 @@ export function DetailPanel() {
 
       <div className="field" style={{ gap: 8 }}>
         <span className="label" style={{ color }}>
-          {[teamName(team, lang), r.priority === 'high' ? t('priority.highLabel') : '', t(`visibility.${r.visibility}`), r.require_upload ? t('submit.badge') : ''].filter(Boolean).join(' · ')}
+          {[teamName(team), r.priority === 'high' ? t('priority.highLabel') : '', t(`visibility.${r.visibility}`), r.require_upload ? t('submit.badge') : ''].filter(Boolean).join(' · ')}
         </span>
         <h2>{r.title}</h2>
       </div>
@@ -209,7 +235,9 @@ export function DetailPanel() {
         <span className="big">{hm(o.at)}</span>
         <div className="lines">
           {o.completion ? (
-            <span className="ok">{t('actions.completed')} · {o.completion.completed_by_name || profiles.find((p) => p.id === o.completion!.completed_by)?.name}</span>
+            <span className="ok">
+              {t('actions.completed')} · {o.completion.completed_by_name || profiles.find((p) => p.id === o.completion!.completed_by)?.name}
+            </span>
           ) : (
             <span className={rel.hot ? 'hot' : ''}>
               {whenLabel(o.at, false)} · {rel.text}
@@ -236,12 +264,7 @@ export function DetailPanel() {
         </div>
       </div>
 
-      {r.source === 'notion' && (
-        <div className="sync-note">
-          <span className="sync-badge">Notion</span>
-          <span>{t('sync.notionHint')}</span>
-        </div>
-      )}
+      {canReview && r.visibility !== 'private' && <ReadReceipts o={o} audience={audience} />}
 
       {r.notes && (
         <div className="field" style={{ gap: 6 }}>
@@ -277,7 +300,7 @@ export function DetailPanel() {
 
       {atts.length > 0 && (
         <div className="field" style={{ gap: 6 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className="sec-line">
             <span className="kicker grow">
               {t('detail.attachments')} · {atts.length}
             </span>
@@ -301,50 +324,56 @@ export function DetailPanel() {
         </div>
       )}
 
-      {showSubmissions && (
+      {/* macOS 桌面壳（WKWebView）不处理 <a download>：导出名单和全部下载一样藏起来，「复制表格」照样能用 */}
+      {homework && canReview && <HomeworkPanel o={o} audience={audience} canExport={canZip} zipping={zipping} onZip={canZip ? () => void downloadAll() : undefined} />}
+
+      {showMyFilesBlock && <MyHomework o={o} hw={myHw!} onDelete={(s) => void deleteSubmission(s)} />}
+
+      {(showAllFiles || (showMyFilesBlock && canUploadMore) || (!homework && canUploadMore && !!o.completion)) && (
         <div className="field" style={{ gap: 6 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className="sec-line">
             <span className="kicker grow">
-              {t('detail.submissions')}
-              {o.submissions.length > 0 ? ` · ${o.submissions.length}` : ''}
+              {showAllFiles ? t('detail.submissions') : ''}
+              {showAllFiles && o.submissions.length > 0 ? ` · ${o.submissions.length}` : ''}
             </span>
-            {o.submissions.length > 0 && canZip && (
+            {showAllFiles && o.submissions.length > 0 && canZip && (
               <button className="mini-btn" onClick={() => void downloadAll()} disabled={zipping}>
                 <IconDownload size={12} />
                 {zipping ? t('detail.zipping') : t('detail.downloadAll')}
               </button>
             )}
-            {(o.completion || mine || !r.require_upload) && !stashMode && (
+            {canUploadMore && (
               <button className="mini-btn" onClick={() => moreInput.current?.click()} disabled={uploading}>
                 <IconUpload size={12} />
                 {t('detail.uploadMore')}
               </button>
             )}
           </div>
-          {o.submissions.length ? (
-            <FileGallery
-              bucket="submissions"
-              items={o.submissions.map((x) => ({ ...x, meta: `${subName(x)} · ${hm(new Date(x.created_at))}` }))}
-              canDelete={(it) => {
-                const x = o.submissions.find((y) => y.id === it.id);
-                return !!x && canDeleteSub(x);
-              }}
-              onDelete={(it) => {
-                const x = o.submissions.find((y) => y.id === it.id);
-                if (x) void deleteSubmission(x);
-              }}
-            />
-          ) : (
-            <span className="hint-text">{t('detail.noSubmissions')}</span>
-          )}
-          {r.require_upload && r.completion_mode === 'each' && people.length > 0 && (
-            <span className={`hint-text ${missing.length ? 'bad' : ''}`}>
-              {missing.length ? t('detail.missing', { names: missing.map((p) => p.name).join('、') }) : t('detail.allSubmitted')}
+          {showAllFiles &&
+            (o.submissions.length ? (
+              <FileGallery
+                bucket="submissions"
+                items={o.submissions.map((x) => ({ ...x, meta: `${subName(x)} · ${hm(new Date(x.created_at))}` }))}
+                canDelete={(it) => {
+                  const x = o.submissions.find((y) => y.id === it.id);
+                  return !!x && canDeleteSub(x);
+                }}
+                onDelete={(it) => {
+                  const x = o.submissions.find((y) => y.id === it.id);
+                  if (x) void deleteSubmission(x);
+                }}
+              />
+            ) : (
+              <span className="hint-text">{t('detail.noSubmissions')}</span>
+            ))}
+          {stationMissing && audience.length > 0 && (
+            <span className={`hint-text ${stationMissing.length ? 'bad' : ''}`}>
+              {stationMissing.length ? `${t('homework.missing')}：${stationMissing.map((p) => p.name).join('、')}` : t('detail.allSubmitted')}
             </span>
           )}
-          <input ref={moreInput} type="file" multiple hidden onChange={() => takeFiles(moreInput.current, 'more')} />
         </div>
       )}
+      <input ref={moreInput} type="file" multiple hidden onChange={() => takeFiles(moreInput.current, 'more')} />
 
       <div className="field" style={{ gap: 6 }}>
         <span className="kicker">{t('detail.history')}</span>
@@ -385,17 +414,17 @@ export function DetailPanel() {
               {t('actions.cancel')}
             </button>
           </div>
-        ) : o.completion ? (
+        ) : o.completion && !(homework && isStation) ? (
           <button className="btn outline lg block" onClick={() => void uncomplete(o)}>
             {t('actions.undo')}
           </button>
         ) : (
           <>
-            {r.require_upload && !mine ? (
+            {homework && mustUpload && (isStation || !mine) ? (
               <>
                 <button className="btn primary lg block" onClick={() => completeInput.current?.click()} disabled={uploading}>
                   <IconUpload size={16} />
-                  {uploading ? progressLabel : t('files.pickToSubmit')}
+                  {uploading ? progressLabel : myHw?.status === 'returned' ? t('homework.resubmit') : t('files.pickToSubmit')}
                 </button>
                 <span className="hint-text" style={{ textAlign: 'center' }}>
                   {t('submit.needUploadHint')}
@@ -407,20 +436,24 @@ export function DetailPanel() {
                   <IconCheck size={16} />
                   {t('actions.complete')}
                 </button>
-                <button className="link-btn" onClick={() => completeInput.current?.click()} disabled={uploading}>
-                  <IconPaperclip size={13} />
-                  {t('files.completeWithFiles')}
-                </button>
+                {(!homework || mustUpload) && (
+                  <button className="link-btn" onClick={() => completeInput.current?.click()} disabled={uploading}>
+                    <IconPaperclip size={13} />
+                    {t('files.completeWithFiles')}
+                  </button>
+                )}
               </>
             )}
-            <div className="row2">
-              <button className="btn outline" onClick={() => void snooze(o, 10)}>
-                {t('actions.snooze10')}
-              </button>
-              <button className="btn ghost" onClick={() => void snooze(o, 24 * 60)}>
-                {t('actions.skipToday')}
-              </button>
-            </div>
+            {!o.completion && (
+              <div className="row2">
+                <button className="btn outline" onClick={() => void snooze(o, 10)}>
+                  {t('actions.snooze10')}
+                </button>
+                <button className="btn ghost" onClick={() => void snooze(o, 24 * 60)}>
+                  {t('actions.skipToday')}
+                </button>
+              </div>
+            )}
           </>
         )}
         <input ref={completeInput} type="file" multiple hidden onChange={() => takeFiles(completeInput.current, 'complete')} />

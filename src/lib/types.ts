@@ -50,7 +50,7 @@ export interface Reminder {
   updated_at: string;
 }
 
-/** 兼任班组：主班组之外，这个人还属于哪些班组 */
+/** 兼任小组：主小组之外，这个人还属于哪些小组 */
 export interface TeamMembership {
   profile_id: string;
   team_id: string;
@@ -73,13 +73,13 @@ export interface Completion {
   note: string;
 }
 
-/** 回传文件：员工上传的填好的表格 / 照片，文件本体在 Storage 桶 submissions */
+/** 回传文件：成员上传的作业 / 填好的表格 / 照片，文件本体在 Storage 桶 submissions */
 export interface Submission {
   id: string;
   reminder_id: string;
   occurrence_at: string;
   uploaded_by: string;
-  uploaded_by_name: string; // 工位模式下选的名字
+  uploaded_by_name: string; // 共用设备上交的时候选的名字
   file_path: string;
   file_name: string;
   size: number;
@@ -192,7 +192,7 @@ export interface LoginIdentity {
   last_login_at: string;
 }
 
-/** 创建人挂在提醒上的附件（照片、PDF、表格……）；和员工完成时交的 Submission 分开 */
+/** 创建人挂在提醒上的附件（照片、PDF、表格……）；和成员完成时交的 Submission 分开 */
 export interface Attachment {
   id: string;
   reminder_id: string;
@@ -204,7 +204,7 @@ export interface Attachment {
   created_at: string;
 }
 
-/** 讨论：company = 全公司；members = 只有 discussion_members 里的人和班组（兼任也算），外加发起人和管理员 */
+/** 讨论：company = 全体；members = 只有 discussion_members 里的人和小组（兼任也算），外加发起人和管理员 */
 export type DiscussionVisibility = 'members' | 'company';
 
 export interface Discussion {
@@ -212,7 +212,7 @@ export interface Discussion {
   title: string;
   body: string;
   created_by: string;
-  created_by_name: string; // 工位账号发起时选的名字
+  created_by_name: string; // 共用设备账号发起时选的名字
   visibility: DiscussionVisibility;
   closed_at: string | null; // 不为空 = 已结束（只读），只有发起人能结束 / 重新打开
   conclusion: string; // 结束时写的一句结论
@@ -236,7 +236,7 @@ export interface DiscussionComment {
   id: string;
   discussion_id: string;
   author_id: string;
-  author_name: string; // 工位账号留言时选的名字
+  author_name: string; // 共用设备账号留言时选的名字
   body: string;
   created_at: string;
 }
@@ -314,8 +314,11 @@ export interface ReminderInput {
 /** 皮肤（每台设备各自选，存在本机设置里），定义在 src/skins.css + src/lib/skins.ts */
 export type Skin = 'default' | 'opencode' | 'notion' | 'popcart';
 
+/**
+ * 这台设备自己的设置（存在本机，不进数据库）。
+ * 免打扰不在这里：它存在服务器的 notify_prefs 里，桌面弹窗和服务号消息共用（见 NotifyPrefs）。
+ */
 export interface Settings {
-  lang: Lang;
   skin: Skin;
   autostart: boolean;
   closeToTray: boolean;
@@ -323,15 +326,10 @@ export interface Settings {
   sound: boolean;
   alertWindow: boolean; // 高优先级额外弹置顶小窗
   defaultRemindBefore: number;
-  dndEnabled: boolean;
-  dndFrom: string; // "18:30"
-  dndTo: string; // "07:00"
-  dndWeekend: boolean; // 周末和法定假日不打扰（调休上班的日子照常）
   overdueRepeatMin: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  lang: 'zh-CN',
   skin: 'default',
   autostart: true,
   closeToTray: true,
@@ -339,10 +337,6 @@ export const DEFAULT_SETTINGS: Settings = {
   sound: true,
   alertWindow: true,
   defaultRemindBefore: 15,
-  dndEnabled: true,
-  dndFrom: '21:30',
-  dndTo: '07:00',
-  dndWeekend: true,
   overdueRepeatMin: 30,
 };
 

@@ -17,7 +17,6 @@ export function DiscussionDueCard({ d, u, from = 'calendar' }: { d: Discussion; 
   const profiles = useStore((s) => s.profiles);
   const teams = useStore((s) => s.teams);
   const members = useStore((s) => s.discussionMembers);
-  const lang = useStore((s) => s.settings.lang);
   const openDiscussion = useStore((s) => s.openDiscussion);
 
   const closed = !!d.closed_at;
@@ -33,9 +32,9 @@ export function DiscussionDueCard({ d, u, from = 'calendar' }: { d: Discussion; 
     d.visibility === 'company'
       ? t('discuss.everyone')
       : [
-          ...teams.filter((tm) => rows.some((m) => m.team_id === tm.id)).map((tm) => teamName(tm, lang)),
+          ...teams.filter((tm) => rows.some((m) => m.team_id === tm.id)).map((tm) => teamName(tm)),
           ...profiles.filter((p) => rows.some((m) => m.user_id === p.id)).map((p) => p.name),
-        ].join(lang.startsWith('de') ? ', ' : '、');
+        ].join('、');
 
   const open = () => openDiscussion(d.id, from);
   const cls = ['card', 'dcard', closed ? 'compact done' : '', over ? 'overdue' : '', u?.unread ? 'unread' : ''].filter(Boolean).join(' ');

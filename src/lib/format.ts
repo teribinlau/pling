@@ -36,9 +36,7 @@ export function isoWeek(ymd: string): number {
 }
 
 export function monthLabel(y: number, m: number): string {
-  return i18n.language.startsWith('de')
-    ? new Date(y, m - 1, 1).toLocaleDateString('de-DE', { month: 'long', year: 'numeric' })
-    : `${y}年${m}月`;
+  return `${y}年${m}月`;
 }
 
 /** 「今天 16:30」「明天 09:00」「9月20日 周日 12:00」 */
@@ -55,7 +53,7 @@ export function whenLabel(at: Date, withTime = true): string {
 export function dateLabel(ymd: string): string {
   const [, m, d] = ymd.split('-').map(Number);
   const wd = i18n.t(`weekdaysLong.${weekdayOf(ymd)}`);
-  return i18n.language.startsWith('de') ? `${wd}, ${d}.${m}.` : `${m}月${d}日 ${wd}`;
+  return `${m}月${d}日 ${wd}`;
 }
 
 /** 距离到期的相对文字：还有 15 分钟 / 逾期 2 小时 */
@@ -86,7 +84,7 @@ export function repeatLabel(r: Reminder): string {
   const days = rule.byday.length ? rule.byday : [zoned(new Date(r.due_at)).getDay()];
   const isWeekdays = days.length === 5 && [1, 2, 3, 4, 5].every((d) => days.includes(d));
   if (isWeekdays) return i18n.t('repeat.weekdays');
-  const names = days.map((d) => i18n.t(`weekdays.${d}`)).join(i18n.language.startsWith('de') ? ', ' : '、');
+  const names = days.map((d) => i18n.t(`weekdays.${d}`)).join('、');
   return i18n.t('repeat.weeklyOn', { days: names });
 }
 
@@ -116,19 +114,30 @@ export function agoLabel(at: Date, now = new Date()): string {
   if (diff === -1) return i18n.t('time.yesterday');
   const [y, m, d] = ymd.split('-').map(Number);
   const sameYear = y === Number(localYmd(now).slice(0, 4));
-  if (i18n.language.startsWith('de')) return sameYear ? `${d}.${m}.` : `${d}.${m}.${y}`;
   return sameYear ? `${m}月${d}日` : `${y}年${m}月${d}日`;
 }
 
-/** 短日期：10月2日 周五 / Fr, 2.10.（不是今年的带上年份） */
+/** 短日期：10月2日 周五（不是今年的带上年份） */
 export function shortDate(ymd: string, withWeekday = true): string {
   const [y, m, d] = ymd.split('-').map(Number);
   const sameYear = y === Number(todayYmd().slice(0, 4));
-  const de = i18n.language.startsWith('de');
-  const date = de ? `${d}.${m}.${sameYear ? '' : y}` : `${sameYear ? '' : `${y}年`}${m}月${d}日`;
+  const date = `${sameYear ? '' : `${y}年`}${m}月${d}日`;
   if (!withWeekday) return date;
-  const wd = weekdayOf(ymd);
-  return de ? `${i18n.t(`weekdays.${wd}`)}, ${date}` : `${date} ${i18n.t(`weekdaysLong.${wd}`)}`;
+  return `${date} ${i18n.t(`weekdaysLong.${weekdayOf(ymd)}`)}`;
+}
+
+/** 完整的日期时间（导出名单用）：2026-10-03 21:40，机构时区 */
+export function fullTime(iso: string | Date): string {
+  const d = typeof iso === 'string' ? new Date(iso) : iso;
+  return `${localYmd(d)} ${localHm(d)}`;
+}
+
+/** 日期范围：10月1日–7日 / 9月30日–10月2日（同一天就一个日期） */
+export function rangeLabel(from: string, to: string): string {
+  if (from === to) return shortDate(from, false);
+  const [, m1, d1] = from.split('-').map(Number);
+  const [, m2, d2] = to.split('-').map(Number);
+  return m1 === m2 ? `${m1}月${d1}日–${d2}日` : `${m1}月${d1}日–${m2}月${d2}日`;
 }
 
 /**

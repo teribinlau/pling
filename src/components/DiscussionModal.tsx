@@ -30,7 +30,6 @@ export function DiscussionModal() {
   const updateDiscussion = useStore((s) => s.updateDiscussion);
   const uploadProgress = useStore((s) => s.uploadProgress);
   const openViewer = useStore((s) => s.openViewer);
-  const lang = useStore((s) => s.settings.lang);
   const editing = modal?.mode === 'edit' ? discussions.find((d) => d.id === modal.id) : undefined;
 
   const [title, setTitle] = useState('');
@@ -220,7 +219,7 @@ export function DiscussionModal() {
                   {teams.map((tm) => (
                     <button key={tm.id} type="button" className={`chip ${teamIds.includes(tm.id) ? 'active' : ''}`} onClick={() => toggleTeam(tm.id)} aria-pressed={teamIds.includes(tm.id)}>
                       <span className="dot" style={{ background: tm.color, width: 8, height: 8 }} />
-                      {teamName(tm, lang)}
+                      {teamName(tm)}
                     </button>
                   ))}
                 </div>
@@ -260,7 +259,7 @@ export function DiscussionModal() {
                       <button key={p.id} type="button" onClick={() => addPerson(p.id)}>
                         <Avatar p={p} size="sm" />
                         {p.name}
-                        <span className="hint-text">{teamName(teams.find((x) => x.id === p.team_id), lang)}</span>
+                        <span className="hint-text">{teamName(teams.find((x) => x.id === p.team_id))}</span>
                       </button>
                     ))}
                   </div>

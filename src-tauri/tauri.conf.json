@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "DZF Reminder",
-  "version": "0.6.2",
-  "identifier": "de.dzf.reminder",
+  "productName": "Pling",
+  "version": "0.1.0",
+  "identifier": "de.ilililab.pling",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "DZF 提醒",
+        "title": "叮一下",
         "width": 1440,
         "height": 940,
         "minWidth": 960,
@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://github.com https://*.github.com https://*.githubusercontent.com https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data: blob: https://*.supabase.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https: wss: http://localhost:* ws://localhost:*; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'"
     }
   },
   "bundle": {
@@ -39,8 +39,8 @@
       "icons/icon.ico"
     ],
     "windows": {
-      "wix": { "language": ["zh-CN", "de-DE"] },
-      "nsis": { "languages": ["SimpChinese", "German"], "installMode": "currentUser" }
+      "wix": { "language": ["zh-CN", "en-US"] },
+      "nsis": { "languages": ["SimpChinese", "English"], "installMode": "currentUser" }
     },
     "macOS": {
       "minimumSystemVersion": "12.0",
@@ -50,9 +50,6 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg2MDQ3OTM4MERCNzA1MzAKUldRd0JiY05PSGtFaGhrVE5md2xKZ0k0R1pSa1ZBdnZkdm96UU1jVGtsTXZ0MlJqZ0VoNGRkdDEK",
-      "endpoints": [
-        "https://github.com/teribinlau/dzf-reminder/releases/latest/download/latest.json"
-      ],
       "windows": { "installMode": "passive" }
     }
   }

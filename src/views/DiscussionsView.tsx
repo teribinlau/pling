@@ -96,7 +96,6 @@ function DiscussionItem({ d, u, active }: { d: Discussion; u: UnreadInfo | undef
   const members = useStore((s) => s.discussionMembers);
   const comments = useStore((s) => s.comments);
   const files = useStore((s) => s.discussionFiles);
-  const lang = useStore((s) => s.settings.lang);
   const openDiscussion = useStore((s) => s.openDiscussion);
 
   const creator = profiles.find((p) => p.id === d.created_by);
@@ -118,9 +117,9 @@ function DiscussionItem({ d, u, active }: { d: Discussion; u: UnreadInfo | undef
     d.visibility === 'company'
       ? t('discuss.everyone')
       : [
-          ...teams.filter((tm) => scopeRows.some((m) => m.team_id === tm.id)).map((tm) => teamName(tm, lang)),
+          ...teams.filter((tm) => scopeRows.some((m) => m.team_id === tm.id)).map((tm) => teamName(tm)),
           ...profiles.filter((p) => scopeRows.some((m) => m.user_id === p.id)).map((p) => p.name),
-        ].join(lang.startsWith('de') ? ', ' : '、');
+        ].join('、');
   const hasFiles = files.some((f) => f.discussion_id === d.id);
   const when = new Date(ts(d.closed_at ?? d.last_activity_at));
   // 截止日期：只给进行中的看（结束了就不用再提）

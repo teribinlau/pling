@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- 可裁切版本（PWA maskable / iOS 主屏幕）：底色铺满，图形缩在中间 80% 的安全区里 -->
+  <rect width="512" height="512" fill="#121212"/>
+  <g transform="translate(58.2 82.2) scale(0.72)">
+    <g transform="rotate(14 230 112)" fill="#FFFFFF">
+      <circle cx="230" cy="108" r="22"/>
+      <path d="M230 122c-60 0-96 46-96 104v54c0 28-13 48-35 64h262c-22-16-35-36-35-64v-54c0-58-36-104-96-104z"/>
+      <path d="M192 364h76a38 38 0 0 1-76 0z"/>
+    </g>
+    <g fill="none" stroke="#FF4B3E" stroke-width="32" stroke-linecap="round">
+      <path d="M344 118A112 112 0 0 1 424 198"/>
+      <path d="M360 56A176 176 0 0 1 486 182"/>
+    </g>
+  </g>
+</svg>

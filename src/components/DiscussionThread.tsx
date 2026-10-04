@@ -37,7 +37,6 @@ export function DiscussionThread({ d, readAt }: { d: Discussion; readAt: string 
   const memberships = useStore((s) => s.memberships);
   const comments = useStore((s) => s.comments);
   const dFiles = useStore((s) => s.discussionFiles);
-  const lang = useStore((s) => s.settings.lang);
   const uploadProgress = useStore((s) => s.uploadProgress);
   const openDiscussion = useStore((s) => s.openDiscussion);
   const openEdit = useStore((s) => s.openEditDiscussion);
@@ -287,7 +286,7 @@ export function DiscussionThread({ d, readAt }: { d: Discussion; readAt: string 
                   {scopeTeams.map((tm) => (
                     <span key={tm.id} className="tchip on">
                       <span className="dot" style={{ background: tm.color, width: 7, height: 7 }} />
-                      {teamName(tm, lang)}
+                      {teamName(tm)}
                     </span>
                   ))}
                   {scopePeople.map((p) => (

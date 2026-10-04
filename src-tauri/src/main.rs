@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    dzf_reminder_lib::run()
+    pling_lib::run()
 }

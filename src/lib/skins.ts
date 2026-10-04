@@ -19,11 +19,19 @@ export interface SkinMeta {
 }
 
 export const SKINS: SkinMeta[] = [
-  { id: 'default', name: 'DZF', source: 'DZF', swatch: ['#eeece7', '#f6f5f1', '#121212', '#e5322d'], previewFont: "'Archivo', sans-serif", rs: 1 },
+  { id: 'default', name: '默认', source: '叮一下', swatch: ['#eeece7', '#f6f5f1', '#121212', '#e5322d'], previewFont: "'Archivo', sans-serif", rs: 1 },
   { id: 'opencode', name: 'opencode.ai', source: 'getdesign', swatch: ['#f8f7f7', '#fdfcfc', '#201d1d', '#007aff'], previewFont: "'JetBrains Mono', monospace", rs: 0.3 },
   { id: 'notion', name: 'Notion', source: 'getdesign', swatch: ['#f6f5f4', '#ffffff', '#191918', '#0075de'], previewFont: "'Inter', sans-serif", rs: 0.7 },
   { id: 'popcart', name: 'Popcart', source: 'Claude Design', swatch: ['#f7f8fa', '#ffffff', '#15181c', '#e4000f'], previewFont: "'Fredoka', sans-serif", rs: 1.4 },
 ];
+
+// 默认皮肤的 Archivo 也打包进来（以前从 Google Fonts 拉，国内经常打不开）；中文一律用系统字体
+void Promise.all([
+  import('@fontsource/archivo/latin-500.css'),
+  import('@fontsource/archivo/latin-700.css'),
+  import('@fontsource/archivo/latin-800.css'),
+  import('@fontsource/archivo/latin-900.css'),
+]).catch(() => undefined);
 
 const FONT_LOADERS: Partial<Record<Skin, () => Promise<unknown>>> = {
   opencode: () =>

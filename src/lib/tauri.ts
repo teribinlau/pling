@@ -94,30 +94,32 @@ export async function setAutostart(enabled: boolean): Promise<void> {
 
 // 自动更新分两步：先在后台把新版本下好（不打断正在干活的人），
 // 等用户点「重启更新」时才真正安装 —— Windows 上安装会关掉应用。
-let pendingUpdate: { version: string; install: () => Promise<void> } | null = null;
+// 更新地址是运行时的（服务器 config.json 里的 updatesUrl），插件的 JS check() 换不了地址，
+// 所以走 src-tauri/src/lib.rs 里自己的两个命令（updater_builder().endpoints(...)）。
+let pendingVersion: string | null = null;
 
-/** 查有没有新版本并下载好；返回新版本号，没有新版本返回 null。可以反复调用。 */
-export async function downloadUpdate(): Promise<string | null> {
-  if (!isTauri()) return null;
-  if (pendingUpdate) return pendingUpdate.version;
+/** 查有没有新版本并下载好；返回新版本号，没有新版本返回 null。可以反复调用。endpoint 空 = 不检查 */
+export async function downloadUpdate(endpoint: string): Promise<string | null> {
+  if (!isTauri() || !endpoint) return null;
+  if (pendingVersion) return pendingVersion;
   try {
-    const { check } = await import('@tauri-apps/plugin-updater');
-    const update = await check();
-    if (!update) return null;
-    await update.download();
-    pendingUpdate = { version: update.version, install: () => update.install() };
-    return update.version;
-  } catch {
-    /* 没配置更新源、离线、或这个平台的清单里没有条目 */
+    const { invoke } = await import('@tauri-apps/api/core');
+    const info = await invoke<{ version: string } | null>('update_download', { endpoint });
+    if (!info) return null;
+    pendingVersion = info.version;
+    return info.version;
+  } catch (e) {
+    /* 离线、清单里没有这个平台、签名对不上…… */
+    console.warn('update check failed', e);
     return null;
   }
 }
 
 /** 安装已经下好的新版本并重启（Windows 上安装程序会先把应用关掉） */
 export async function installUpdate(): Promise<void> {
-  if (!pendingUpdate) return;
-  await pendingUpdate.install();
-  await relaunchApp();
+  if (!pendingVersion) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('update_install');
 }
 
 export async function relaunchApp(): Promise<void> {

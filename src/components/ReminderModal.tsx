@@ -18,19 +18,20 @@ interface Template {
   before: number;
   priority: Priority;
   repeat: RepeatPreset;
-  teamSort: number; // 2 = 出库组
+  /** 交作业 / 收材料：每个人都要交文件 */
+  upload?: boolean;
+  /** 不重复的模板：默认放到几天以后（交作业一般给一周） */
+  inDays?: number;
 }
 
+/** 常用模板：学校、小团队通用（指派默认还是自己的小组，可以改） */
 const TEMPLATES: Template[] = [
-  { key: 'dpdCutoff', time: '16:30', before: 15, priority: 'high', repeat: 'none', teamSort: 2 },
-  { key: 'dpdPickup', time: '17:00', before: 15, priority: 'high', repeat: 'none', teamSort: 2 },
-  { key: 'dhlCutoff', time: '15:00', before: 30, priority: 'high', repeat: 'none', teamSort: 2 },
-  { key: 'dhlPickup', time: '15:30', before: 15, priority: 'high', repeat: 'none', teamSort: 2 },
-  { key: 'fedexCutoff', time: '16:30', before: 15, priority: 'high', repeat: 'none', teamSort: 2 },
-  { key: 'fedexPickup', time: '17:00', before: 15, priority: 'high', repeat: 'none', teamSort: 2 },
-  { key: 'gelPickup', time: '14:00', before: 60, priority: 'medium', repeat: 'none', teamSort: 2 },
-  { key: 'xlPickup', time: '16:00', before: 30, priority: 'medium', repeat: 'none', teamSort: 2 },
-  { key: 'raben', time: '09:00', before: 60, priority: 'medium', repeat: 'none', teamSort: 2 },
+  { key: 'homework', time: '22:00', before: 1440, priority: 'high', repeat: 'none', upload: true, inDays: 7 },
+  { key: 'collect', time: '17:00', before: 1440, priority: 'medium', repeat: 'none', upload: true, inDays: 3 },
+  { key: 'meeting', time: '14:00', before: 30, priority: 'medium', repeat: 'none', inDays: 1 },
+  { key: 'duty', time: '17:30', before: 15, priority: 'medium', repeat: 'weekdays' },
+  { key: 'signup', time: '17:00', before: 1440, priority: 'high', repeat: 'none', inDays: 5 },
+  { key: 'weekly', time: '16:00', before: 60, priority: 'low', repeat: 'weekly' },
 ];
 
 const BEFORE_OPTIONS = [0, 5, 15, 30, 60, 1440];
@@ -51,7 +52,6 @@ export function ReminderModal() {
   const attachments = useStore((s) => s.attachments);
   const uploadProgress = useStore((s) => s.uploadProgress);
   const openViewer = useStore((s) => s.openViewer);
-  const lang = settings.lang;
   const editing = editId ? reminders.find((r) => r.id === editId) : undefined;
   // 附件：新选的文件先放本地，保存时才上传；旧附件点 × 只是标记，保存时才删
   const [files, setFiles] = useState<File[]>([]);
@@ -127,7 +127,7 @@ export function ReminderModal() {
     if (!q) return { people: [], teams: [] };
     return {
       people: profiles.filter((p) => p.active && !p.is_station && !userIds.includes(p.id) && (p.name.toLowerCase().includes(q) || p.email.toLowerCase().includes(q))).slice(0, 6),
-      teams: teams.filter((tm) => !teamIds.includes(tm.id) && (tm.name_zh.includes(q) || tm.name_de.toLowerCase().includes(q))),
+      teams: teams.filter((tm) => !teamIds.includes(tm.id) && tm.name.toLowerCase().includes(q)),
     };
   }, [query, profiles, teams, userIds, teamIds]);
 
@@ -145,11 +145,9 @@ export function ReminderModal() {
     setBefore(tpl.before);
     setPriority(tpl.priority);
     setRepeat(tpl.repeat);
-    const team = teams.find((tm) => tm.sort === tpl.teamSort) ?? teams[0];
-    if (team) {
-      setTeamIds([team.id]);
-      setUserIds([]);
-    }
+    if (tpl.inDays !== undefined) setDate(ymdOffset(new Date(), tpl.inDays));
+    setRequireUpload(!!tpl.upload);
+    setMode(tpl.upload ? 'each' : 'any');
     setVisibility('team');
   };
 
@@ -209,7 +207,7 @@ export function ReminderModal() {
               <span className="lbl">{t('form.templates')}</span>
               <div className="templates">
                 {TEMPLATES.map((tpl) => (
-                  <button key={tpl.key} type="button" onClick={() => applyTemplate(tpl)}>
+                  <button key={tpl.key} type="button" onClick={() => applyTemplate(tpl)} title={t(`templates.${tpl.key}`)}>
                     {t(`templates.${tpl.key}`).split(' — ')[0]}
                   </button>
                 ))}
@@ -283,7 +281,7 @@ export function ReminderModal() {
                 if (!tm) return null;
                 return (
                   <span key={id} className="tag team" style={{ background: tm.color }}>
-                    {teamName(tm, lang)}
+                    {teamName(tm)}
                     <button type="button" className="x" aria-label={t('actions.delete')} onClick={() => setTeamIds(teamIds.filter((x) => x !== id))}>
                       <IconX size={11} />
                     </button>
@@ -309,14 +307,14 @@ export function ReminderModal() {
                   {candidates.teams.map((tm) => (
                     <button key={tm.id} type="button" onClick={() => { setTeamIds([...teamIds, tm.id]); setQuery(''); }}>
                       <span className="dot" style={{ background: tm.color, width: 10, height: 10 }} />
-                      {teamName(tm, lang)}
+                      {teamName(tm)}
                     </button>
                   ))}
                   {candidates.people.map((p) => (
                     <button key={p.id} type="button" onClick={() => { setUserIds([...userIds, p.id]); setQuery(''); }}>
                       <Avatar p={p} size="sm" />
                       {p.name}
-                      <span className="hint-text">{teamName(teams.find((x) => x.id === p.team_id), lang)}</span>
+                      <span className="hint-text">{teamName(teams.find((x) => x.id === p.team_id))}</span>
                     </button>
                   ))}
                 </div>

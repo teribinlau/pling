@@ -1,13 +1,14 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { dayDiff, monthLabel, shortDate, todayYmd } from '../lib/format';
-import { isHessenHoliday } from '../lib/holidays';
+import { holidayOn } from '../lib/holidays';
+import { useStore } from '../lib/store';
 import { IconCalendar, IconChevronL, IconChevronR, IconClock } from './Icons';
 
 // 日期 / 时间选择：浏览器自带的 <input type="date|time"> 在 Mac（Safari / 桌面版的 WKWebView）上
 // 没有日历和时钟小图标，时间框根本没有选择面板，日期面板也常常点了不出来 —— 所以自己画一套，各平台一样。
 
-/* ---------------- 日期工具（都是柏林本地日期 YYYY-MM-DD，按 UTC 算天数，不受夏令时影响） ---------------- */
+/* ---------------- 日期工具（都是机构时区的本地日期 YYYY-MM-DD，按 UTC 算天数，不受夏令时影响） ---------------- */
 
 const toDate = (ymd: string) => new Date(ymd + 'T00:00:00Z');
 const fromDate = (d: Date) => d.toISOString().slice(0, 10);
@@ -187,6 +188,7 @@ export function DateField({ id, value, onChange, min, max, placeholder, classNam
 /** 月历：方向键按天 / 按周移动，PageUp / PageDown 换月，Home / End 到周一 / 周日，回车选中 */
 function MonthCalendar({ value, min, max, onPick }: { value: string; min?: string; max?: string; onPick: (ymd: string) => void }) {
   const { t } = useTranslation();
+  useStore((s) => s.holidays); // 节假日变了（管理员加了 / 实时同步）重新画
   const today = todayYmd();
   const [cursor, setCursor] = useState(() => clamp(value || today, min, max));
   const [month, setMonth] = useState(cursor.slice(0, 7));
@@ -247,18 +249,22 @@ function MonthCalendar({ value, min, max, onPick }: { value: string; min?: strin
         ))}
         {cells.map((ymd) => {
           const wd = toDate(ymd).getUTCDay();
-          const holiday = isHessenHoliday(ymd);
+          const h = holidayOn(ymd);
+          const holiday = h?.kind === 'off';
+          const makeup = h?.kind === 'work';
           const off = (!!min && ymd < min) || (!!max && ymd > max);
           const cls = [
             'cal-day',
             ymd.slice(0, 7) !== month ? 'other' : '',
-            wd === 0 || wd === 6 ? 'weekend' : '',
+            (wd === 0 || wd === 6) && !makeup ? 'weekend' : '',
             holiday ? 'holiday' : '',
+            makeup ? 'makeup' : '',
             ymd === today ? 'today' : '',
             ymd === value ? 'selected' : '',
           ]
             .filter(Boolean)
             .join(' ');
+          const tip = h ? `${h.name} · ${holiday ? t('picker.holiday') : t('picker.makeup')}` : undefined;
           return (
             <button
               key={ymd}
@@ -269,8 +275,8 @@ function MonthCalendar({ value, min, max, onPick }: { value: string; min?: strin
               tabIndex={ymd === cursor ? 0 : -1}
               aria-pressed={ymd === value}
               aria-current={ymd === today ? 'date' : undefined}
-              aria-label={shortDate(ymd) + (holiday ? ` · ${t('picker.holiday')}` : '')}
-              title={holiday ? t('picker.holiday') : undefined}
+              aria-label={shortDate(ymd) + (tip ? ` · ${tip}` : '')}
+              title={tip}
               onClick={() => onPick(ymd)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
@@ -280,6 +286,11 @@ function MonthCalendar({ value, min, max, onPick }: { value: string; min?: strin
               }}
             >
               {Number(ymd.slice(8, 10))}
+              {(holiday || makeup) && (
+                <i className={`hday ${holiday ? 'off' : 'work'}`} aria-hidden="true">
+                  {holiday ? t('holidays.badgeOff') : t('holidays.badgeWork')}
+                </i>
+              )}
             </button>
           );
         })}

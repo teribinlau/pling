@@ -1,5 +1,6 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { createClient, type EmailOtpType, type SupabaseClient } from '@supabase/supabase-js';
 import type {
+  AppSettings,
   Assignee,
   Attachment,
   Completion,
@@ -9,14 +10,33 @@ import type {
   DiscussionInput,
   DiscussionMember,
   DiscussionRead,
+  LoginIdentity,
+  NotifyPrefs,
   Profile,
   Reminder,
   ReminderInput,
+  ReminderRead,
   Snooze,
   Submission,
+  SubmissionStatus,
   Team,
+  TeamInvite,
   TeamMembership,
+  TeamWebhook,
+  WechatBinding,
 } from './types';
+import { DEFAULT_APP_SETTINGS, TZ } from './types';
+import type { Holiday } from './holidays';
+import { getConfig } from './config';
+import {
+  fnErrorFrom,
+  type AuthFinishResponse,
+  type AuthStartRequest,
+  type AuthStartResponse,
+  type NotifyTestResponse,
+  type PlingFunction,
+  type WechatBindResponse,
+} from './functions';
 
 export interface Session {
   userId: string;
@@ -31,46 +51,86 @@ export interface Snapshot {
   completions: Completion[];
   snoozes: Snooze[];
   submissions: Submission[];
-  memberships: TeamMembership[]; // 兼任班组
+  memberships: TeamMembership[]; // 兼任小组
   attachments: Attachment[]; // 创建人挂的附件
-  // 讨论（0006 迁移）：留言只加载最近 DISCUSSION_WINDOW_DAYS 天的，更早的在打开讨论时按需加载
+  // 讨论：留言只加载最近 DISCUSSION_WINDOW_DAYS 天的，更早的在打开讨论时按需加载
   discussions: Discussion[];
   discussionMembers: DiscussionMember[];
   comments: DiscussionComment[];
   discussionFiles: DiscussionFile[]; // 正文附件全部 + 窗口内留言的附件
   discussionReads: DiscussionRead[]; // 我的已读位置
-  /** false = 数据库里还没有讨论的表（0006 迁移还没跑） */
+  /** false = 数据库里还没有讨论的表 */
   discussionsReady: boolean;
+  /** 机构设置（机构名、「小组」「全体」的叫法、时区、逾期推送次数） */
+  appSettings: AppSettings;
+  /** 节假日：off 放假 / work 调休上班 */
+  holidays: Holiday[];
+  /** 已读回执（近 60 天）：自己的 + 我创建的提醒的（管理员是全部） */
+  reads: ReminderRead[];
+  /** 我的通知设置；null = 还没存过，用默认值 */
+  notifyPrefs: NotifyPrefs | null;
+  /** 我的服务号绑定 */
+  wechatBinding: WechatBinding | null;
+  /** 微信 / QQ 身份：自己的；管理员是全部（成员列表显示登录方式） */
+  identities: LoginIdentity[];
+  /** 邀请码（只有管理员拿得到） */
+  invites: TeamInvite[];
+  /** 群机器人（只有管理员拿得到） */
+  webhooks: TeamWebhook[];
 }
 
-/** 三个私有桶：员工交的文件 / 创建人挂的附件 / 讨论里的文件 */
+/** 三个私有桶：成员交的文件 / 创建人挂的附件 / 讨论里的文件 */
 export type FileBucket = 'submissions' | 'attachments' | 'discussions';
 
 /** 留言只自动加载最近这么多天的 */
 export const DISCUSSION_WINDOW_DAYS = 120;
-
-/** 数据库里还没有 due_date 这一列（0007 迁移没跑）：PostgREST 报 PGRST204，直连 Postgres 是 42703 */
-function missingDueColumn(e: { code?: string; message?: string } | null): boolean {
-  return !!e && (e.code === 'PGRST204' || e.code === '42703') && /due_date/.test(e.message ?? '');
-}
-
-/** 设了截止日期但数据库还没升级：store 认 code，换成「请管理员先执行迁移 0007」的提示 */
-export function needMigration(): Error {
-  return Object.assign(new Error('column discussions.due_date is missing: run migration 0007_discussion_due_date.sql'), { code: 'DZF_NEED_0007' });
-}
+/** 完成记录 / 回传文件 / 已读只加载最近这么多天的 */
+export const RECENT_DAYS = 60;
 
 /** 发一条留言要登记的内容（文件本体单独传） */
 export type CommentDraft = Pick<DiscussionComment, 'discussion_id' | 'author_id' | 'author_name' | 'body'>;
 
-/** 上传回传文件时的元数据（文件本体单独传） */
-export type SubmissionMeta = Omit<Submission, 'id' | 'created_at' | 'file_path' | 'file_name' | 'size' | 'mime'>;
+/** 上传回传文件时的元数据（文件本体单独传；状态 / 批语由服务器定） */
+export type SubmissionMeta = Pick<Submission, 'reminder_id' | 'occurrence_at' | 'uploaded_by' | 'uploaded_by_name'>;
+
+/** 新建邀请码（码由客户端随机生成） */
+export interface InviteInput {
+  team_id: string | null;
+  note: string;
+  expires_at: string | null;
+  max_uses: number | null;
+}
+
+/** 新建 / 改群机器人 */
+export type WebhookInput = Pick<TeamWebhook, 'team_id' | 'kind' | 'name' | 'url' | 'secret' | 'stages' | 'enabled'> & { id?: string };
+
+/** redeem_invite() 的结果 */
+export interface RedeemResult {
+  ok: boolean;
+  reason?: 'not_signed_in' | 'not_found' | 'disabled' | 'expired' | 'used_up' | 'no_profile' | 'station' | string;
+  team_id?: string | null;
+  was_active?: boolean;
+}
 
 export const MAX_UPLOAD_MB = 20;
+
+/** 微信 / QQ 登录的账号，邮箱是内部用的假地址（@login.pling.invalid），不显示 */
+export function displayEmail(email: string | null | undefined): string {
+  return email && !/@login\.pling\.invalid$/i.test(email) ? email : '';
+}
 
 /** Storage 对象名：时间 + 随机串 + 原扩展名（原始文件名可能有中文 / 空格，存在表里） */
 function objectName(fileName: string): string {
   const ext = (fileName.match(/\.([a-z0-9]{1,8})$/i)?.[1] ?? 'bin').toLowerCase();
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+}
+
+const INVITE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 去掉 I O 0 1，念 / 抄的时候不会弄混
+
+export function randomInviteCode(len = 8): string {
+  const bytes = new Uint8Array(len);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => INVITE_ALPHABET[b % INVITE_ALPHABET.length]).join('');
 }
 
 export interface Repo {
@@ -83,8 +143,20 @@ export interface Repo {
   /** 演示模式：直接以某个示例用户身份进入 */
   signInDemo?(userId: string): Promise<void>;
   signOut(): Promise<void>;
-  loadAll(): Promise<Snapshot>;
-  subscribe(onChange: () => void): () => void;
+  loadAll(userId: string): Promise<Snapshot>;
+  /**
+   * 实时订阅：别人改了数据就调 onChange（去抖后重新 loadAll）。
+   * onRead 给了的话，新增的已读回执直接交给它合并（不为每一条「谁看了一眼」把 20 多张表重新拉一遍）；没给就也走 onChange。
+   */
+  subscribe(onChange: () => void, onRead?: (row: ReminderRead) => void): () => void;
+
+  // ---- 微信 / QQ 登录（docs §6.1–6.3） ----
+  authStart(req: AuthStartRequest): Promise<AuthStartResponse>;
+  authFinish(id: string, secret: string): Promise<AuthFinishResponse>;
+  /** 用 auth-finish 拿到的一次性令牌换成会话 */
+  verifyTokenHash(tokenHash: string, type: string): Promise<void>;
+  redeemInvite(code: string): Promise<RedeemResult>;
+
   createReminder(input: ReminderInput, userId: string): Promise<string>;
   updateReminder(id: string, input: ReminderInput): Promise<void>;
   deleteReminder(id: string): Promise<void>;
@@ -96,8 +168,12 @@ export interface Repo {
   addSubmission(meta: SubmissionMeta, file: File): Promise<Submission>;
   /** 删记录 + 删文件 */
   removeSubmission(s: Submission): Promise<void>;
+  /** 批改：一个人这一次交的几个文件一起标成通过 / 退回（带一句批语） */
+  reviewSubmissions(ids: string[], status: SubmissionStatus, note: string): Promise<void>;
   /** 拿一个短期有效的下载地址（浏览器直接打开就会下载） */
   submissionUrl(s: Submission): Promise<string>;
+  /** 已读回执：看过某条提醒的这一次到期（重复写无害） */
+  markRead(reminderId: string, occurrenceAt: string, userId: string): Promise<void>;
   /** 给提醒挂一个附件（只有创建人 / 管理员有权限，数据库里也拦着） */
   addAttachment(reminderId: string, userId: string, file: File): Promise<Attachment>;
   removeAttachment(a: Attachment): Promise<void>;
@@ -106,10 +182,30 @@ export interface Repo {
   /** 一次拿一批图片的预览地址（缩略图用），返回 path → url */
   fileUrls(bucket: FileBucket, paths: string[]): Promise<Record<string, string>>;
   updateProfile(id: string, patch: Partial<Profile>): Promise<void>;
-  /** 设置某人的兼任班组（整组替换，不含主班组） */
+  /** 设置某人的兼任小组（整组替换，不含主小组） */
   setMemberships(profileId: string, teamIds: string[]): Promise<void>;
-  upsertTeam(team: Partial<Team> & { name_zh: string; name_de: string; color: string }): Promise<void>;
+  upsertTeam(team: Partial<Team> & { name: string; color: string }): Promise<void>;
   deleteTeam(id: string): Promise<void>;
+
+  // ---- 机构设置、节假日（管理员） ----
+  updateAppSettings(patch: Partial<AppSettings>): Promise<void>;
+  /** 加一段节假日（起止日期都含），已有的日子会被覆盖 */
+  addHolidays(rows: Holiday[]): Promise<void>;
+  removeHolidays(days: string[]): Promise<void>;
+
+  // ---- 通知 ----
+  saveNotifyPrefs(p: NotifyPrefs): Promise<void>;
+  /** 服务号绑定二维码（10 分钟有效） */
+  wechatBind(): Promise<WechatBindResponse>;
+  unbindWechat(userId: string): Promise<void>;
+  /** { webhookId } 给群机器人发测试消息；{ wechat: true } 给自己发一条服务号测试消息 */
+  notifyTest(body: { webhookId: string } | { wechat: true }): Promise<NotifyTestResponse>;
+
+  // ---- 邀请码、群机器人（管理员） ----
+  createInvite(input: InviteInput, userId: string): Promise<TeamInvite>;
+  setInviteDisabled(code: string, disabled: boolean): Promise<void>;
+  upsertWebhook(w: WebhookInput): Promise<void>;
+  deleteWebhook(id: string): Promise<void>;
 
   // 讨论
   createDiscussion(input: DiscussionInput, userId: string): Promise<string>;
@@ -136,16 +232,36 @@ export interface Repo {
 // Supabase 实现
 // ---------------------------------------------------------------------------
 export function hasSupabaseConfig(): boolean {
-  return !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);
+  return !getConfig().demo;
+}
+
+/** 测试用：换掉 fetch / 本地存储 */
+export interface SupabaseRepoOptions {
+  url?: string;
+  anonKey?: string;
+  fetch?: typeof fetch;
+  storage?: { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void };
 }
 
 export class SupabaseRepo implements Repo {
   mode = 'supabase' as const;
   client: SupabaseClient;
 
-  constructor() {
-    this.client = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+  constructor(opts: SupabaseRepoOptions = {}) {
+    const cfg = getConfig();
+    const url = opts.url ?? cfg.supabaseUrl;
+    const key = opts.anonKey ?? cfg.supabaseAnonKey;
+    // 登录状态按服务器分开存：桌面版换了服务器，不会拿着上一家的会话去连下一家
+    let storageKey = 'pling-auth';
+    try {
+      const u = new URL(url);
+      storageKey = `pling-auth-${u.host}${u.pathname.replace(/\/+$/, '')}`.replace(/[^A-Za-z0-9._-]/g, '_');
+    } catch {
+      /* 地址不对 createClient 会报错 */
+    }
+    this.client = createClient(url, key, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storageKey, ...(opts.storage ? { storage: opts.storage } : {}) },
+      ...(opts.fetch ? { global: { fetch: opts.fetch } } : {}),
     });
   }
 
@@ -164,10 +280,9 @@ export class SupabaseRepo implements Repo {
   }
 
   async signInWithEmail(email: string): Promise<void> {
-    const { error } = await this.client.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: window.location.origin },
-    });
+    // 邮件里的链接打开网页版（桌面版的地址 tauri://localhost 在浏览器里打不开）；桌面版填验证码
+    const site = getConfig().publicUrl || window.location.origin;
+    const { error } = await this.client.auth.signInWithOtp({ email, options: { emailRedirectTo: site } });
     if (error) throw error;
   }
 
@@ -180,79 +295,128 @@ export class SupabaseRepo implements Repo {
     await this.client.auth.signOut();
   }
 
-  async loadAll(): Promise<Snapshot> {
-    const since = new Date(Date.now() - 60 * 86400000).toISOString();
+  // ---- 云函数 ----
+  private async invokeFn<T>(name: PlingFunction, body: unknown): Promise<T> {
+    const { data, error } = await this.client.functions.invoke(name, { body: body as Record<string, unknown> });
+    if (error) throw await fnErrorFrom(error);
+    return data as T;
+  }
+
+  authStart(req: AuthStartRequest): Promise<AuthStartResponse> {
+    return this.invokeFn<AuthStartResponse>('auth-start', req);
+  }
+
+  authFinish(id: string, secret: string): Promise<AuthFinishResponse> {
+    return this.invokeFn<AuthFinishResponse>('auth-finish', { id, secret });
+  }
+
+  async verifyTokenHash(tokenHash: string, type: string): Promise<void> {
+    const { error } = await this.client.auth.verifyOtp({ token_hash: tokenHash, type: (type || 'magiclink') as EmailOtpType });
+    if (error) throw error;
+  }
+
+  async redeemInvite(code: string): Promise<RedeemResult> {
+    const { data, error } = await this.client.rpc('redeem_invite', { p_code: code });
+    if (error) throw error;
+    return (data ?? { ok: false, reason: 'unknown' }) as RedeemResult;
+  }
+
+  async loadAll(userId: string): Promise<Snapshot> {
+    const since = new Date(Date.now() - RECENT_DAYS * 86400000).toISOString();
     const dSince = new Date(Date.now() - DISCUSSION_WINDOW_DAYS * 86400000).toISOString();
-    const [teams, profiles, reminders, assignees, completions, snoozes, submissions, memberships, attachments, discussions, dMembers, comments, dFiles, dReads] = await Promise.all([
-      this.client.from('teams').select('*').order('sort'),
-      this.client.from('profiles').select('*').order('name'),
-      this.client.from('reminders').select('*').eq('archived', false),
-      this.client.from('reminder_assignees').select('*'),
-      this.client.from('completions').select('*').gte('occurrence_at', since),
-      this.client.from('snoozes').select('*'),
-      this.client.from('submissions').select('*').gte('occurrence_at', since).order('created_at'),
-      this.client.from('profile_teams').select('profile_id, team_id'),
-      this.client.from('reminder_attachments').select('*').order('created_at'),
-      this.client.from('discussions').select('*').order('last_activity_at', { ascending: false }),
-      this.client.from('discussion_members').select('*'),
-      this.client.from('discussion_comments').select('*').gte('created_at', dSince).order('created_at'),
-      this.client.from('discussion_files').select('*').or(`comment_id.is.null,created_at.gte."${dSince}"`).order('created_at'),
-      this.client.from('discussion_reads').select('*'),
-    ]);
+    const c = this.client;
+    const [teams, profiles, reminders, assignees, completions, snoozes, submissions, memberships, attachments, discussions, dMembers, comments, dFiles, dReads, settings, holidays, reads, prefs, binding, identities, invites, webhooks] =
+      await Promise.all([
+        c.from('teams').select('*').order('sort'),
+        c.from('profiles').select('*').order('name'),
+        c.from('reminders').select('*').eq('archived', false),
+        c.from('reminder_assignees').select('*'),
+        c.from('completions').select('*').gte('occurrence_at', since),
+        c.from('snoozes').select('*'),
+        c.from('submissions').select('*').gte('occurrence_at', since).order('created_at'),
+        c.from('profile_teams').select('profile_id, team_id'),
+        c.from('reminder_attachments').select('*').order('created_at'),
+        c.from('discussions').select('*').order('last_activity_at', { ascending: false }),
+        c.from('discussion_members').select('*'),
+        c.from('discussion_comments').select('*').gte('created_at', dSince).order('created_at'),
+        c.from('discussion_files').select('*').or(`comment_id.is.null,created_at.gte."${dSince}"`).order('created_at'),
+        c.from('discussion_reads').select('*').eq('user_id', userId),
+        c.from('app_settings').select('org_name, team_label, org_label, timezone, push_overdue_max').eq('id', 1).maybeSingle(),
+        c.from('holidays').select('day, kind, name').order('day'),
+        c.from('reminder_reads').select('*').gte('occurrence_at', since),
+        c.from('notify_prefs').select('user_id, wechat, dnd_enabled, dnd_from, dnd_to, dnd_rest_days').eq('user_id', userId).maybeSingle(),
+        c.from('wechat_bindings').select('user_id, openid, unionid, subscribed, nickname, bound_at').eq('user_id', userId).maybeSingle(),
+        c.from('login_identities').select('provider, subject, unionid, user_id, nickname, avatar_url, created_at, last_login_at'),
+        c.from('team_invites').select('*').order('created_at', { ascending: false }),
+        c.from('team_webhooks').select('*').order('created_at'),
+      ]);
     const err = [teams, profiles, reminders, assignees, completions, snoozes, submissions, memberships].find((r) => r.error)?.error;
     if (err) throw err;
+    const list = <T>(r: { data: unknown; error: unknown }): T[] => (r.error ? [] : ((r.data ?? []) as T[]));
     return {
       teams: (teams.data ?? []) as Team[],
-      profiles: (profiles.data ?? []) as Profile[],
+      profiles: ((profiles.data ?? []) as Profile[]).map((p) => ({ ...p, phone: p.phone ?? '', avatar_url: p.avatar_url ?? '', name_confirmed: p.name_confirmed ?? true })),
       reminders: (reminders.data ?? []) as Reminder[],
       assignees: (assignees.data ?? []) as Assignee[],
       completions: (completions.data ?? []) as Completion[],
       snoozes: (snoozes.data ?? []) as Snooze[],
-      submissions: (submissions.data ?? []) as Submission[],
+      submissions: ((submissions.data ?? []) as Submission[]).map((s) => ({ ...s, status: s.status ?? 'submitted', review_note: s.review_note ?? '', reviewed_by: s.reviewed_by ?? null, reviewed_at: s.reviewed_at ?? null })),
       memberships: (memberships.data ?? []) as TeamMembership[],
-      // 附件表是 0005 迁移加的：前端先上线、迁移还没跑时，这里报错不能把整个应用拖垮，当作没有附件
-      attachments: attachments.error ? [] : ((attachments.data ?? []) as Attachment[]),
-      // 讨论的表是 0006 迁移加的：同理，没跑迁移之前当作没有讨论，界面上提示先跑迁移
+      // 后加的表：查询出错（权限、表不存在）不能把整个应用拖垮，当作没有
+      attachments: list<Attachment>(attachments),
       discussionsReady: !discussions.error,
-      // 截止日期是 0007 迁移加的：没跑之前这一列不存在，当作都没设
-      discussions: discussions.error ? [] : ((discussions.data ?? []) as Discussion[]).map((d) => ({ ...d, due_date: d.due_date ?? null })),
-      discussionMembers: dMembers.error ? [] : ((dMembers.data ?? []) as DiscussionMember[]),
-      comments: comments.error ? [] : ((comments.data ?? []) as DiscussionComment[]),
-      discussionFiles: dFiles.error ? [] : ((dFiles.data ?? []) as DiscussionFile[]),
-      discussionReads: dReads.error ? [] : ((dReads.data ?? []) as DiscussionRead[]),
+      discussions: list<Discussion>(discussions).map((d) => ({ ...d, due_date: d.due_date ?? null })),
+      discussionMembers: list<DiscussionMember>(dMembers),
+      comments: list<DiscussionComment>(comments),
+      discussionFiles: list<DiscussionFile>(dFiles),
+      discussionReads: list<DiscussionRead>(dReads),
+      appSettings: { ...DEFAULT_APP_SETTINGS, ...((settings.error ? null : settings.data) ?? {}) } as AppSettings,
+      holidays: list<Holiday>(holidays).map((h) => ({ ...h, day: String(h.day).slice(0, 10) })),
+      reads: list<ReminderRead>(reads),
+      notifyPrefs: prefs.error ? null : ((prefs.data as NotifyPrefs | null) ?? null),
+      wechatBinding: binding.error ? null : ((binding.data as WechatBinding | null) ?? null),
+      identities: list<LoginIdentity>(identities),
+      invites: list<TeamInvite>(invites),
+      webhooks: list<TeamWebhook>(webhooks).map((w) => ({ ...w, stages: (w.stages ?? ['due']) as TeamWebhook['stages'] })),
     };
   }
 
-  subscribe(onChange: () => void): () => void {
+  subscribe(onChange: () => void, onRead?: (row: ReminderRead) => void): () => void {
     let timer: number | undefined;
     const debounced = () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(onChange, 250);
     };
-    const channel = this.client
-      .channel('dzf-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reminders' }, debounced)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reminder_assignees' }, debounced)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'completions' }, debounced)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'submissions' }, debounced)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reminder_attachments' }, debounced)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, debounced)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'teams' }, debounced)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'profile_teams' }, debounced)
-      .subscribe();
-    // 讨论单独一个频道：一个频道里只要有一张表订阅不上（比如 0006 迁移还没跑、表还不存在），
-    // 整个频道都会失败 —— 分开放，提醒的实时同步不受影响
-    const discuss = this.client
-      .channel('dzf-discussions')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'discussions' }, debounced)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'discussion_members' }, debounced)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'discussion_comments' }, debounced)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'discussion_files' }, debounced)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'discussion_reads' }, debounced)
-      .subscribe();
+    const on = (ch: ReturnType<SupabaseClient['channel']>, tables: string[]) => {
+      for (const table of tables) {
+        if (table === 'reminder_reads' && onRead) {
+          // 已读回执只会新增（主键冲突的重复写被忽略）：新的一行直接合并；删除（提醒 / 人被删）少见，照样整体刷新
+          ch.on('postgres_changes', { event: 'INSERT', schema: 'public', table }, (p) => onRead(p.new as ReminderRead));
+          ch.on('postgres_changes', { event: 'DELETE', schema: 'public', table }, debounced);
+        } else {
+          ch.on('postgres_changes', { event: '*', schema: 'public', table }, debounced);
+        }
+      }
+      return ch.subscribe();
+    };
+    const channel = on(this.client.channel('pling-changes'), [
+      'reminders',
+      'reminder_assignees',
+      'completions',
+      'submissions',
+      'reminder_attachments',
+      'profiles',
+      'teams',
+      'profile_teams',
+    ]);
+    // 讨论、后加的表各自一个频道：一个频道里只要有一张表订阅不上，整个频道都会失败 —— 分开放，提醒的实时同步不受影响
+    const discuss = on(this.client.channel('pling-discussions'), ['discussions', 'discussion_members', 'discussion_comments', 'discussion_files', 'discussion_reads']);
+    const extra = on(this.client.channel('pling-extra'), ['app_settings', 'holidays', 'reminder_reads', 'notify_prefs', 'wechat_bindings']);
     return () => {
+      window.clearTimeout(timer);
       this.client.removeChannel(channel);
       this.client.removeChannel(discuss);
+      this.client.removeChannel(extra);
     };
   }
 
@@ -289,7 +453,7 @@ export class SupabaseRepo implements Repo {
   async createReminder(input: ReminderInput, userId: string): Promise<string> {
     const { data, error } = await this.client
       .from('reminders')
-      .insert({ ...this.reminderRow(input), created_by: userId })
+      .insert({ ...this.reminderRow(input), created_by: userId, tz: TZ })
       .select('id')
       .single();
     if (error) throw error;
@@ -324,12 +488,7 @@ export class SupabaseRepo implements Repo {
   }
 
   async clearSnooze(reminderId: string, userId: string, occurrenceAt: string): Promise<void> {
-    await this.client
-      .from('snoozes')
-      .delete()
-      .eq('reminder_id', reminderId)
-      .eq('user_id', userId)
-      .eq('occurrence_at', occurrenceAt);
+    await this.client.from('snoozes').delete().eq('reminder_id', reminderId).eq('user_id', userId).eq('occurrence_at', occurrenceAt);
   }
 
   async addSubmission(meta: SubmissionMeta, file: File): Promise<Submission> {
@@ -354,13 +513,26 @@ export class SupabaseRepo implements Repo {
     await this.client.storage.from('submissions').remove([s.file_path]);
   }
 
+  async reviewSubmissions(ids: string[], status: SubmissionStatus, note: string): Promise<void> {
+    if (!ids.length) return;
+    const { data, error } = await this.client.from('submissions').update({ status, review_note: note }).in('id', ids).select('id');
+    if (error) throw error;
+    if (!data?.length) throw new Error('not allowed');
+  }
+
   async submissionUrl(s: Submission): Promise<string> {
     return this.fileUrl('submissions', s.file_path, s.file_name);
   }
 
+  async markRead(reminderId: string, occurrenceAt: string, userId: string): Promise<void> {
+    const { error } = await this.client
+      .from('reminder_reads')
+      .upsert({ reminder_id: reminderId, occurrence_at: occurrenceAt, user_id: userId }, { onConflict: 'reminder_id,occurrence_at,user_id', ignoreDuplicates: true });
+    if (error) throw error;
+  }
+
   async addAttachment(reminderId: string, userId: string, file: File): Promise<Attachment> {
     if (file.size > MAX_UPLOAD_MB * 1024 * 1024) throw new Error(`too large: ${file.name}`);
-    // 对象路径只用 ASCII，第一段是提醒 id（Storage 权限靠它判断）
     const path = `${reminderId}/${objectName(file.name)}`;
     const up = await this.client.storage.from('attachments').upload(path, file, { contentType: file.type || 'application/octet-stream', upsert: false });
     if (up.error) throw up.error;
@@ -408,13 +580,78 @@ export class SupabaseRepo implements Repo {
     }
   }
 
-  async upsertTeam(team: Partial<Team> & { name_zh: string; name_de: string; color: string }): Promise<void> {
+  async upsertTeam(team: Partial<Team> & { name: string; color: string }): Promise<void> {
     const { error } = await this.client.from('teams').upsert(team);
     if (error) throw error;
   }
 
   async deleteTeam(id: string): Promise<void> {
     const { error } = await this.client.from('teams').delete().eq('id', id);
+    if (error) throw error;
+  }
+
+  // ---- 机构设置、节假日 ----
+  async updateAppSettings(patch: Partial<AppSettings>): Promise<void> {
+    const { data, error } = await this.client.from('app_settings').update(patch).eq('id', 1).select('id');
+    if (error) throw error;
+    if (!data?.length) throw new Error('not allowed');
+  }
+
+  async addHolidays(rows: Holiday[]): Promise<void> {
+    if (!rows.length) return;
+    const { error } = await this.client.from('holidays').upsert(rows, { onConflict: 'day' });
+    if (error) throw error;
+  }
+
+  async removeHolidays(days: string[]): Promise<void> {
+    if (!days.length) return;
+    const { error } = await this.client.from('holidays').delete().in('day', days);
+    if (error) throw error;
+  }
+
+  // ---- 通知 ----
+  async saveNotifyPrefs(p: NotifyPrefs): Promise<void> {
+    const { error } = await this.client.from('notify_prefs').upsert(p, { onConflict: 'user_id' });
+    if (error) throw error;
+  }
+
+  wechatBind(): Promise<WechatBindResponse> {
+    return this.invokeFn<WechatBindResponse>('wechat-bind', {});
+  }
+
+  async unbindWechat(userId: string): Promise<void> {
+    const { error } = await this.client.from('wechat_bindings').delete().eq('user_id', userId);
+    if (error) throw error;
+  }
+
+  notifyTest(body: { webhookId: string } | { wechat: true }): Promise<NotifyTestResponse> {
+    return this.invokeFn<NotifyTestResponse>('notify-test', body);
+  }
+
+  // ---- 邀请码、群机器人 ----
+  async createInvite(input: InviteInput, userId: string): Promise<TeamInvite> {
+    for (let attempt = 0; ; attempt++) {
+      const row = { ...input, code: randomInviteCode(), created_by: userId };
+      const { data, error } = await this.client.from('team_invites').insert(row).select('*').single();
+      if (!error) return data as TeamInvite;
+      // 码撞了（主键冲突）就换一个再来
+      if (error.code !== '23505' || attempt >= 4) throw error;
+    }
+  }
+
+  async setInviteDisabled(code: string, disabled: boolean): Promise<void> {
+    const { error } = await this.client.from('team_invites').update({ disabled }).eq('code', code);
+    if (error) throw error;
+  }
+
+  async upsertWebhook(w: WebhookInput): Promise<void> {
+    const row = { team_id: w.team_id, kind: w.kind, name: w.name, url: w.url, secret: w.secret, stages: w.stages, enabled: w.enabled };
+    const { error } = w.id ? await this.client.from('team_webhooks').update(row).eq('id', w.id) : await this.client.from('team_webhooks').insert(row);
+    if (error) throw error;
+  }
+
+  async deleteWebhook(id: string): Promise<void> {
+    const { error } = await this.client.from('team_webhooks').delete().eq('id', id);
     if (error) throw error;
   }
 
@@ -436,31 +673,15 @@ export class SupabaseRepo implements Repo {
   }
 
   async createDiscussion(input: DiscussionInput, userId: string): Promise<string> {
-    const row: Record<string, unknown> = { title: input.title, body: input.body, visibility: input.visibility, created_by: userId, created_by_name: input.created_by_name };
-    const insert = (withDue: boolean) =>
-      this.client
-        .from('discussions')
-        .insert(withDue ? { ...row, due_date: input.due_date } : row)
-        .select('id')
-        .single();
-    let { data, error } = await insert(true);
-    if (missingDueColumn(error)) {
-      // 前端先上线、0007 迁移还没跑：没设截止日期就照常发起；设了就报错，不能悄悄丢掉
-      if (input.due_date) throw needMigration();
-      ({ data, error } = await insert(false));
-    }
+    const row = { title: input.title, body: input.body, visibility: input.visibility, created_by: userId, created_by_name: input.created_by_name, due_date: input.due_date };
+    const { data, error } = await this.client.from('discussions').insert(row).select('id').single();
     if (error) throw error;
-    await this.writeDiscussionMembers(data!.id as string, input);
-    return data!.id as string;
+    await this.writeDiscussionMembers(data.id as string, input);
+    return data.id as string;
   }
 
   async updateDiscussion(id: string, input: DiscussionInput): Promise<void> {
-    const patch = { title: input.title, body: input.body, visibility: input.visibility };
-    let { error } = await this.client.from('discussions').update({ ...patch, due_date: input.due_date }).eq('id', id);
-    if (missingDueColumn(error)) {
-      if (input.due_date) throw needMigration();
-      ({ error } = await this.client.from('discussions').update(patch).eq('id', id));
-    }
+    const { error } = await this.client.from('discussions').update({ title: input.title, body: input.body, visibility: input.visibility, due_date: input.due_date }).eq('id', id);
     if (error) throw error;
     await this.writeDiscussionMembers(id, input);
   }
@@ -486,7 +707,6 @@ export class SupabaseRepo implements Repo {
 
   private async uploadDiscussionObject(discussionId: string, file: File): Promise<string> {
     if (file.size > MAX_UPLOAD_MB * 1024 * 1024) throw new Error(`too large: ${file.name}`);
-    // 对象路径只用 ASCII，第一段是讨论 id（Storage 权限靠它判断）
     const path = `${discussionId}/${objectName(file.name)}`;
     const up = await this.client.storage.from('discussions').upload(path, file, { contentType: file.type || 'application/octet-stream', upsert: false });
     if (up.error) throw up.error;
@@ -544,7 +764,6 @@ export class SupabaseRepo implements Repo {
   }
 
   async removeComment(c: DiscussionComment, files: DiscussionFile[]): Promise<void> {
-    // 先删行（没权限就停在这里），再删存储对象（上传人 / 管理员都删得动）
     const { data, error } = await this.client.from('discussion_comments').delete().eq('id', c.id).select('id');
     if (error) throw error;
     if (!data?.length) throw new Error('not allowed');
@@ -552,9 +771,7 @@ export class SupabaseRepo implements Repo {
   }
 
   async markDiscussionRead(discussionId: string, userId: string, at: string): Promise<void> {
-    const { error } = await this.client
-      .from('discussion_reads')
-      .upsert({ discussion_id: discussionId, user_id: userId, last_read_at: at }, { onConflict: 'discussion_id,user_id' });
+    const { error } = await this.client.from('discussion_reads').upsert({ discussion_id: discussionId, user_id: userId, last_read_at: at }, { onConflict: 'discussion_id,user_id' });
     if (error) throw error;
   }
 

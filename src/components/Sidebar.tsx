@@ -5,6 +5,7 @@ import { useOccurrences } from '../lib/useData';
 import { useDueDiscussions } from '../lib/useDiscussions';
 import { resolveAssignees } from '../lib/occurrences';
 import { localYmd } from '../lib/recurrence';
+import { holidayOn } from '../lib/holidays';
 import { dayDiff, hm, monthLabel, relativeLabel, todayYmd, zoned } from '../lib/format';
 import { Avatar } from './Avatar';
 import { IconChat, IconCheck, IconChevronL, IconChevronR, IconPlus, IconSearch } from './Icons';
@@ -26,6 +27,7 @@ export function Sidebar() {
   const anchor = useStore((s) => s.calendarAnchor);
   const setAnchor = useStore((s) => s.setCalendarAnchor);
   const openDiscussion = useStore((s) => s.openDiscussion);
+  useStore((s) => s.holidays); // 节假日变了要重画迷你月历
   const [search, setSearch] = useState('');
   const [showSearch, setShowSearch] = useState(false);
 
@@ -135,12 +137,12 @@ export function Sidebar() {
     <aside className="sidebar">
       <div className="head">
         <h1>{view === 'board' ? t('views.board') : view === 'settings' ? t('settings.title') : t('views.calendar')}</h1>
-        <button className="icon-btn" aria-label={t('actions.open')} onClick={() => setShowSearch((v) => !v)}>
+        <button className="icon-btn" aria-label={t('actions.search')} onClick={() => setShowSearch((v) => !v)}>
           <IconSearch size={18} />
         </button>
       </div>
       {showSearch && (
-        <input className="input" autoFocus placeholder="…" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="search" />
+        <input className="input" autoFocus placeholder={t('actions.search')} value={search} onChange={(e) => setSearch(e.target.value)} aria-label={t('actions.search')} />
       )}
       {filtered ? (
         <div className="side-section">{filtered.length ? filtered.map((o) => row(o, false)) : <div className="hint-text">{t('groups.none')}</div>}</div>
@@ -164,14 +166,18 @@ export function Sidebar() {
             {cells.map((c) => {
               const wd = new Date(c.ymd + 'T00:00:00Z').getUTCDay();
               const dots = dotsByDay.get(c.ymd) ?? [];
+              const h = holidayOn(c.ymd);
+              const rest = h ? h.kind === 'off' : wd === 0 || wd === 6;
               return (
                 <button
                   key={c.ymd}
-                  className={`cell ${c.other ? 'other' : ''} ${wd === 0 || wd === 6 ? 'weekend' : ''} ${c.ymd === today ? 'today' : ''} ${c.ymd === selectedYmd ? 'selected' : ''}`}
+                  className={`cell ${c.other ? 'other' : ''} ${rest ? 'weekend' : ''} ${h ? `h-${h.kind}` : ''} ${c.ymd === today ? 'today' : ''} ${c.ymd === selectedYmd ? 'selected' : ''}`}
                   onClick={() => pickDay(c.ymd)}
-                  aria-label={c.ymd}
+                  aria-label={h ? `${c.ymd} ${h.name} ${h.kind === 'off' ? t('holidays.off') : t('holidays.work')}` : c.ymd}
+                  title={h ? `${h.name} · ${h.kind === 'off' ? t('holidays.off') : t('holidays.work')}` : undefined}
                 >
                   <span className="num">{c.day}</span>
+                  {h && <i className={`hday mini ${h.kind}`}>{h.kind === 'off' ? t('holidays.badgeOff') : t('holidays.badgeWork')}</i>}
                   <span className="dots">
                     {dots.map((d, i) => (
                       <i key={i} style={{ background: d }} />

@@ -1,7 +1,8 @@
 import { useTranslation } from 'react-i18next';
 import { useStore } from '../lib/store';
 import { Avatar } from './Avatar';
-import { IconBell, IconCalendar, IconChat, IconList, IconSliders, IconUsers } from './Icons';
+import { IconCalendar, IconChat, IconList, IconSliders, IconUsers } from './Icons';
+import { BrandMark } from './BrandMark';
 import { clockLabel } from '../lib/format';
 
 export function Rail({ overdue, unreadDiscussions }: { overdue: number; unreadDiscussions: number }) {
@@ -9,6 +10,7 @@ export function Rail({ overdue, unreadDiscussions }: { overdue: number; unreadDi
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
   const setSettingsTab = useStore((s) => s.setSettingsTab);
+  const settingsTab = useStore((s) => s.settingsTab);
   const me = useStore((s) => s.me);
   const online = useStore((s) => s.online);
   const fromCache = useStore((s) => s.fromCache);
@@ -16,8 +18,8 @@ export function Rail({ overdue, unreadDiscussions }: { overdue: number; unreadDi
 
   return (
     <nav className="rail" aria-label="main">
-      <div className="logo">
-        <IconBell size={18} />
+      <div className="logo" title={t('app.name')}>
+        <BrandMark size={36} />
       </div>
       <button className={`nav-btn ${view === 'board' ? 'active' : ''}`} aria-label={t('nav.board')} title={t('nav.board')} onClick={() => setView('board')}>
         <IconList size={18} />
@@ -32,11 +34,11 @@ export function Rail({ overdue, unreadDiscussions }: { overdue: number; unreadDi
       </button>
       {me?.role === 'admin' && (
         <button
-          className={`nav-btn ${view === 'settings' && useStore.getState().settingsTab === 'accounts' ? 'active' : ''}`}
+          className={`nav-btn ${view === 'settings' && settingsTab === 'members' ? 'active' : ''}`}
           aria-label={t('nav.teams')}
           title={t('nav.teams')}
           onClick={() => {
-            setSettingsTab('accounts');
+            setSettingsTab('members');
             setView('settings');
           }}
         >
@@ -44,11 +46,11 @@ export function Rail({ overdue, unreadDiscussions }: { overdue: number; unreadDi
         </button>
       )}
       <button
-        className={`nav-btn ${view === 'settings' ? 'active' : ''}`}
+        className={`nav-btn ${view === 'settings' && settingsTab !== 'members' ? 'active' : ''}`}
         aria-label={t('nav.settings')}
         title={t('nav.settings')}
         onClick={() => {
-          setSettingsTab('general');
+          if (settingsTab === 'members') setSettingsTab('general');
           setView('settings');
         }}
       >
@@ -63,9 +65,17 @@ export function Rail({ overdue, unreadDiscussions }: { overdue: number; unreadDi
         <span className="dot" style={{ width: 10, height: 10 }} />
       </div>
       {me && (
-        <div style={{ marginTop: 6 }} title={me.name}>
+        <button
+          className="rail-me"
+          title={me.name}
+          aria-label={`${t('settings.account')} · ${me.name}`}
+          onClick={() => {
+            setSettingsTab('account');
+            setView('settings');
+          }}
+        >
           <Avatar p={me} size="lg" />
-        </div>
+        </button>
       )}
     </nav>
   );
