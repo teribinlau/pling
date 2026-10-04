@@ -115,9 +115,8 @@ export function missingSubmitters(o: Occurrence, people: Profile[]): Profile[] {
   return people.filter((p) => !o.submissions.some((s) => (s.uploaded_by_name ? s.uploaded_by_name === p.name : s.uploaded_by === p.id)));
 }
 
-export function teamName(t: Team | undefined, lang: string): string {
-  if (!t) return '';
-  return lang.startsWith('de') ? t.name_de : t.name_zh;
+export function teamName(t: Team | undefined, _lang?: string): string {
+  return t?.name ?? '';
 }
 
 export function initials(name: string): string {

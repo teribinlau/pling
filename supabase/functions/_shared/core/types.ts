@@ -1,14 +1,14 @@
 // 自动生成：源文件在 src/lib/，改那边再跑 npm run sync:core，不要直接改这里。
 export type Role = 'admin' | 'member';
-export type Lang = 'zh-CN' | 'de-DE';
+export type Lang = 'zh-CN' | 'en-US';
 export type Priority = 'low' | 'medium' | 'high';
 export type Visibility = 'private' | 'team' | 'company';
 export type CompletionMode = 'any' | 'each';
 
+/** 小组（界面上的叫法由机构设置的 team_label 决定：班级 / 部门 / 小组……） */
 export interface Team {
   id: string;
-  name_zh: string;
-  name_de: string;
+  name: string;
   color: string;
   sort: number;
 }
@@ -22,6 +22,9 @@ export interface Profile {
   lang: Lang;
   is_station: boolean;
   active: boolean;
+  phone: string; // 选填：工作群机器人 @ 人用
+  avatar_url: string; // 微信 / QQ 头像
+  name_confirmed: boolean; // false = 第一次进应用要先填真实姓名
 }
 
 export interface Reminder {
@@ -42,7 +45,7 @@ export interface Reminder {
   completion_mode: CompletionMode;
   require_upload: boolean; // 需要回传文件：必须上传文件才能点完成
   archived: boolean;
-  source: string | null; // 外部来源：'notion' = Notion 到柜登记表；null = 手动创建
+  source: string | null; // 外部来源（以后做导入用）；null = 手动创建
   source_key: string | null;
   created_at: string;
   updated_at: string;
@@ -82,7 +85,112 @@ export interface Submission {
   file_name: string;
   size: number;
   mime: string;
+  created_at: string; // 服务器时间；晚于这一次的到期时间 = 迟交
+  status: SubmissionStatus;
+  review_note: string; // 退回 / 通过时写的一句批语
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+}
+
+/** 作业批改状态：已交（待批）/ 退回重交 / 通过 */
+export type SubmissionStatus = 'submitted' | 'returned' | 'accepted';
+
+/** 已读回执：某人看过某条提醒的某一次到期 */
+export interface ReminderRead {
+  reminder_id: string;
+  occurrence_at: string;
+  user_id: string;
+  read_at: string;
+}
+
+/** 机构设置（整个部署一行，管理员改） */
+export interface AppSettings {
+  org_name: string;
+  team_label: string; // 「小组」这个词：班级 / 部门 / 班组……
+  org_label: string; // 「全体」这个词：全校 / 全公司……
+  timezone: string;
+  push_overdue_max: number; // 逾期后服务号 / 群机器人最多再催几次
+}
+
+export const DEFAULT_APP_SETTINGS: AppSettings = {
+  org_name: '',
+  team_label: '小组',
+  org_label: '全体',
+  timezone: 'Asia/Shanghai',
+  push_overdue_max: 2,
+};
+
+/** 个人通知设置（服务端推送和桌面弹窗共用）；数据库里没有这一行 = 用默认值 */
+export interface NotifyPrefs {
+  user_id: string;
+  wechat: boolean; // 服务号消息
+  dnd_enabled: boolean;
+  dnd_from: string; // "21:30"
+  dnd_to: string; // "07:00"
+  dnd_rest_days: boolean; // 周末和法定假日不打扰（调休上班的日子照常）
+}
+
+export const DEFAULT_NOTIFY_PREFS: Omit<NotifyPrefs, 'user_id'> = {
+  wechat: true,
+  dnd_enabled: true,
+  dnd_from: '21:30',
+  dnd_to: '07:00',
+  dnd_rest_days: true,
+};
+
+/** 服务号绑定：提醒会发到这个 openid */
+export interface WechatBinding {
+  user_id: string;
+  openid: string;
+  unionid: string;
+  subscribed: boolean; // 取消关注了就收不到模板消息
+  nickname: string;
+  bound_at: string;
+}
+
+export type NotifyStage = 'pre' | 'due' | 'overdue';
+export type WebhookKind = 'wecom' | 'dingtalk' | 'feishu';
+
+/** 小组的工作群机器人（只有管理员看得到）；team_id 为空 = 「全体」的提醒发这里 */
+export interface TeamWebhook {
+  id: string;
+  team_id: string | null;
+  kind: WebhookKind;
+  name: string;
+  url: string;
+  secret: string;
+  stages: NotifyStage[];
+  enabled: boolean;
   created_at: string;
+  last_at: string | null;
+  last_status: string;
+}
+
+/** 邀请码：新成员凭它自己激活并进小组 */
+export interface TeamInvite {
+  code: string;
+  team_id: string | null;
+  note: string;
+  created_by: string;
+  created_at: string;
+  expires_at: string | null;
+  max_uses: number | null;
+  uses: number;
+  disabled: boolean;
+}
+
+export type LoginProvider = 'wechat_open' | 'wechat_mp' | 'qq';
+
+/** 账号绑定的微信 / QQ 身份 */
+export interface LoginIdentity {
+  provider: LoginProvider;
+  subject: string;
+  unionid: string;
+  user_id: string;
+  nickname: string;
+  avatar_url: string;
+  created_at: string;
+  last_login_at: string;
 }
 
 /** 创建人挂在提醒上的附件（照片、PDF、表格……）；和员工完成时交的 Submission 分开 */
@@ -112,7 +220,7 @@ export interface Discussion {
   comment_count: number; // 服务器维护；比本地加载到的多 = 有更早的留言没加载
   last_activity_at: string; // 最近一次动静（新留言 / 改内容 / 结束 / 重开）的服务器时间
   last_activity_by: string | null;
-  /** 截止日期（柏林本地日期 YYYY-MM-DD），可以不设；设了就出现在日历的那一天（不弹提醒）。0007 迁移加的 */
+  /** 截止日期（机构时区的本地日期 YYYY-MM-DD），可以不设；设了就出现在日历的那一天（不弹提醒） */
   due_date: string | null;
   created_at: string;
   updated_at: string;
@@ -219,7 +327,7 @@ export interface Settings {
   dndEnabled: boolean;
   dndFrom: string; // "18:30"
   dndTo: string; // "07:00"
-  dndWeekend: boolean;
+  dndWeekend: boolean; // 周末和法定假日不打扰（调休上班的日子照常）
   overdueRepeatMin: number;
 }
 
@@ -233,7 +341,7 @@ export const DEFAULT_SETTINGS: Settings = {
   alertWindow: true,
   defaultRemindBefore: 15,
   dndEnabled: true,
-  dndFrom: '18:30',
+  dndFrom: '21:30',
   dndTo: '07:00',
   dndWeekend: true,
   overdueRepeatMin: 30,

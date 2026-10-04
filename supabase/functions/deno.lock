@@ -1,7 +1,8 @@
 {
   "version": "5",
   "specifiers": {
-    "npm:date-fns-tz@3.2.0": "3.2.0_date-fns@4.4.0"
+    "npm:date-fns-tz@3.2.0": "3.2.0_date-fns@4.4.0",
+    "npm:postgres@3.4.7": "3.4.7"
   },
   "npm": {
     "date-fns-tz@3.2.0_date-fns@4.4.0": {
@@ -12,6 +13,9 @@
     },
     "date-fns@4.4.0": {
       "integrity": "sha512-+1UMbeh68lH1SegH83CGWwpb6OHHbpSgr3+s5Eww5M4CAgswBpoWS0AjTOfEJ33HiYKz1hdj/KTFprzXHmq/6w=="
+    },
+    "postgres@3.4.7": {
+      "integrity": "sha512-Jtc2612XINuBjIl/QTWsV5UvE8UHuNblcO3vVADSrKsrc6RqGX6lOW1cEo3CM2v0XG4Nat8nI+YM7/f26VxXLw=="
     }
   }
 }

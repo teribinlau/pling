@@ -5,7 +5,7 @@
 //   FREQ=MONTHLY                          每月同一天
 import { fromZonedTime, toZonedTime } from 'date-fns-tz';
 import { TZ } from './types';
-import { isMakeupWorkday, isOffDay } from './holidays';
+import { isMakeupWorkday, isOffDay, isRestDay } from './holidays';
 
 export type RepeatPreset = 'none' | 'daily' | 'weekdays' | 'weekly' | 'monthly' | 'custom';
 
@@ -140,4 +140,29 @@ export function expandOccurrences(
     if (at >= from && at <= to) out.push(at);
   }
   return out;
+}
+
+function hmToMinutes(hm: string): number {
+  const [h, m] = hm.split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+export interface QuietTime {
+  enabled: boolean;
+  from: string; // "21:30"
+  to: string; // "07:00"
+  restDays: boolean; // 周末和法定假日全天免打扰（调休上班的日子照常）
+}
+
+/** 免打扰：按机构时区判断 now 是否落在免打扰里。桌面弹窗（scheduler）和服务端推送（notify）共用 */
+export function inQuietTime(q: QuietTime, now: Date): boolean {
+  if (!q.enabled) return false;
+  const z = toZonedTime(now, TZ);
+  const ymd = `${z.getFullYear()}-${pad(z.getMonth() + 1)}-${pad(z.getDate())}`;
+  if (q.restDays && isRestDay(ymd, z.getDay())) return true;
+  const cur = z.getHours() * 60 + z.getMinutes();
+  const from = hmToMinutes(q.from);
+  const to = hmToMinutes(q.to);
+  if (from === to) return false;
+  return from < to ? cur >= from && cur < to : cur >= from || cur < to;
 }

@@ -275,8 +275,13 @@ begin
     create publication supabase_realtime;
   end if;
 end $$;
-alter publication supabase_realtime add table public.reminders;
-alter publication supabase_realtime add table public.reminder_assignees;
-alter publication supabase_realtime add table public.completions;
-alter publication supabase_realtime add table public.profiles;
-alter publication supabase_realtime add table public.teams;
+do $$
+declare
+  t text;
+begin
+  foreach t in array array['reminders', 'reminder_assignees', 'completions', 'profiles', 'teams'] loop
+    if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
+      execute format('alter publication supabase_realtime add table public.%I', t);
+    end if;
+  end loop;
+end $$;
