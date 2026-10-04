@@ -55,7 +55,9 @@ npm run dev            # http://localhost:1420
 ```bash
 npm run test:unit                      # 前端单元测试
 npm run test:ui                        # 界面测试（演示模式；需要 Playwright 浏览器）
-scripts/dev-db/up.sh --db pling_auth_test     # 本机测试库：模拟 Supabase 的角色和 schema，跑完全部迁移
+scripts/dev-db/up.sh --db pling_db_test       # 本机测试库：模拟 Supabase 的角色和 schema，跑完全部迁移
+npm run test:db                        # 数据库权限测试（谁能看、谁能改，每张表都测）
+scripts/dev-db/up.sh --db pling_auth_test
 scripts/dev-db/up.sh --db pling_notify_test
 deno test -A --config supabase/functions/deno.json tests/functions/   # 云函数测试（真的数据库 + 假的微信 / QQ / GoTrue）
 ```

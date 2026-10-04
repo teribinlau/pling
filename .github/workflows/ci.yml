@@ -60,8 +60,11 @@ jobs:
           PLING_AUTH_TEST_DB: postgres://postgres@127.0.0.1:5432/pling_auth_test
           PLING_NOTIFY_TEST_DB: postgres://postgres@127.0.0.1:5432/pling_notify_test
         run: deno test -A --config supabase/functions/deno.json tests/functions/
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
       - name: 数据库权限测试
-        if: hashFiles('tests/db/*.test.mjs') != ''
         env:
           PLING_DB_TEST_URL: postgres://postgres@127.0.0.1:5432/pling_ci
-        run: npm ci && node --test tests/db/
+        run: npm ci && npm run test:db
