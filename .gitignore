@@ -13,3 +13,7 @@ src-tauri/gen
 test-results/
 playwright-report/
 blob-report/
+
+# 本机运行部署时的数据、打包输出
+/data/
+/release/

@@ -1,0 +1,428 @@
+# 叮一下 · Pling —— 自托管部署（一家机构一套）
+#
+# 用法（都在 deploy/ 目录里执行；第一次用 scripts/install.sh）：
+#   启动 / 应用配置改动：  docker compose up -d
+#   看状态：              docker compose ps
+#   看日志：              docker compose logs -f functions
+#   停止：                docker compose down
+#
+# 目录约定（相对本文件）：
+#   ../supabase/functions   云函数代码        ../supabase/migrations  数据库迁移（scripts/migrate.sh 执行）
+#   ../web                  网页版（构建好的静态文件）
+#   ${PLING_DATA_DIR}       所有数据：db（数据库）、storage（上传的文件）、certs（证书）、downloads（桌面版安装包）、
+#                           web-extra（放在网站根目录的验证文件）、backups（备份）
+#
+# Supabase 各组件的镜像版本和配置跟随官方自托管仓库（见 supabase/README.md）。
+# 和官方相比：去掉了连接池 / 日志分析 / 图片处理，数据库和 API 网关不对外开端口，
+# 对外只有 web（nginx）一个入口：网页 + /api/（转给网关）+ /downloads/。
+
+name: pling
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+
+  # --------------------------------------------------------------------------
+  # 对外入口：网页、/config.json、/api/、/downloads/、HTTPS
+  # --------------------------------------------------------------------------
+  web:
+    image: ${PLING_REGISTRY:-}library/nginx:stable-alpine
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      api-gw:
+        condition: service_started
+    ports:
+      - ${PLING_HTTP_PORT:-80}:80
+      - ${PLING_HTTPS_PORT:-443}:443
+    volumes:
+      - ${PLING_WEB_DIR:-../web}:/usr/share/nginx/html-src:ro
+      - ./web/nginx:/etc/pling/nginx:ro
+      - ./web/entrypoint/19-pling.sh:/docker-entrypoint.d/19-pling.sh:ro
+      - ./web/email-templates:/usr/share/nginx/email-templates:ro
+      - ${PLING_DATA_DIR:-../data}/downloads:/usr/share/nginx/downloads:ro
+      - ${PLING_DATA_DIR:-../data}/web-extra:/usr/share/nginx/web-extra:ro
+      - ${PLING_DATA_DIR:-../data}/certs:/etc/pling/certs:ro
+      - letsencrypt:/etc/letsencrypt:ro
+      - certbot-www:/var/www/certbot:ro
+    environment:
+      PLING_PUBLIC_URL: ${PLING_PUBLIC_URL}
+      PLING_ORG_NAME: ${PLING_ORG_NAME:-}
+      PLING_ANON_KEY: ${ANON_KEY}
+      PLING_TLS: ${PLING_TLS:-auto}
+      PLING_SSL_CERT: ${PLING_SSL_CERT:-/etc/pling/certs/fullchain.pem}
+      PLING_SSL_KEY: ${PLING_SSL_KEY:-/etc/pling/certs/privkey.pem}
+      PLING_HEAD_HTML: ${PLING_HEAD_HTML:-}
+      # 下面几个只用来决定登录页显示哪些按钮（只传「配没配」，不把密钥传进这个容器）
+      PLING_HAS_EMAIL: ${SMTP_HOST:+${SMTP_ADMIN_EMAIL:+1}}
+      PLING_EMAIL_LOGIN: ${PLING_EMAIL_LOGIN:-auto}
+      PLING_HAS_WECHAT_OPEN: ${WECHAT_OPEN_APPID:+${WECHAT_OPEN_SECRET:+1}}
+      PLING_HAS_WECHAT_MP: ${WECHAT_MP_APPID:+${WECHAT_MP_SECRET:+1}}
+      PLING_HAS_WECHAT_MP_NOTIFY: ${WECHAT_MP_APPID:+${WECHAT_MP_SECRET:+${WECHAT_MP_TOKEN:+${WECHAT_MP_TEMPLATE_ID:+1}}}}
+      PLING_HAS_QQ: ${QQ_APPID:+${QQ_APPKEY:+1}}
+
+  # 自动申请 / 续期 Let's Encrypt 证书（COMPOSE_PROFILES 里带 certbot 才会启动；第一次申请用 scripts/cert.sh）
+  certbot:
+    image: ${PLING_REGISTRY:-}certbot/certbot:latest
+    profiles: ["certbot"]
+    restart: unless-stopped
+    logging: *logging
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+    entrypoint: ["/bin/sh", "-c", "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"]
+
+  # --------------------------------------------------------------------------
+  # Supabase API 网关（Envoy，官方默认），只在内网
+  # --------------------------------------------------------------------------
+  api-gw:
+    image: ${PLING_REGISTRY:-}envoyproxy/envoy:v1.39.1
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      default:
+        aliases:
+          - envoy
+          - kong
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/8000'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - ./supabase/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./supabase/envoy/cds.yaml:/etc/envoy/cds.yaml:ro
+      - ./supabase/envoy/lds.template.yaml:/etc/envoy/lds.template.yaml:ro
+      - ./supabase/envoy/docker-entrypoint.sh:/docker-entrypoint.sh:ro
+    environment:
+      ANON_KEY: ${ANON_KEY}
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      SUPABASE_PUBLISHABLE_KEY: ""
+      SUPABASE_SECRET_KEY: ""
+      ANON_KEY_ASYMMETRIC: ""
+      SERVICE_ROLE_KEY_ASYMMETRIC: ""
+      SUPABASE_PUBLIC_URL: ${PLING_PUBLIC_URL}/api
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME:-pling}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
+    entrypoint: ["/bin/sh", "/docker-entrypoint.sh"]
+
+  # --------------------------------------------------------------------------
+  # 登录（GoTrue）
+  # --------------------------------------------------------------------------
+  auth:
+    image: ${PLING_REGISTRY:-}supabase/gotrue:v2.196.0
+    restart: unless-stopped
+    logging: *logging
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
+      timeout: 5s
+      interval: 5s
+      retries: 3
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: ${PLING_PUBLIC_URL}/api/auth/v1
+
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@db:5432/postgres
+
+      GOTRUE_SITE_URL: ${PLING_PUBLIC_URL}
+      GOTRUE_URI_ALLOW_LIST: ${PLING_PUBLIC_URL}/**
+      # 任何人都能注册（邮箱验证码 / 微信 / QQ），但注册后是「待激活」，要管理员激活或用邀请码才看得到内容
+      GOTRUE_DISABLE_SIGNUP: "false"
+
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: ${JWT_EXPIRY:-3600}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_JWT_ISSUER: ${PLING_PUBLIC_URL}/api/auth/v1
+
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: "false"
+      GOTRUE_MAILER_AUTOCONFIRM: "false"
+      GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
+      GOTRUE_SMS_AUTOCONFIRM: "false"
+
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-}
+      GOTRUE_SMTP_HOST: ${SMTP_HOST:-}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT:-465}
+      GOTRUE_SMTP_USER: ${SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${SMTP_PASS:-}
+      GOTRUE_SMTP_SENDER_NAME: ${SMTP_SENDER_NAME:-叮一下}
+
+      # 邮件里的链接：网关挂在 /api 下面，所以路径要带 /api（GoTrue 用这个路径替换 API_EXTERNAL_URL 的路径）
+      GOTRUE_MAILER_URLPATHS_INVITE: /api/auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /api/auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: /api/auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /api/auth/v1/verify
+      # 中文邮件：6 位验证码，15 分钟有效。模板由 web 容器在内网提供（deploy/web/email-templates/）
+      GOTRUE_MAILER_OTP_LENGTH: "6"
+      GOTRUE_MAILER_OTP_EXP: "900"
+      GOTRUE_MAILER_SUBJECTS_MAGIC_LINK: 叮一下登录验证码
+      GOTRUE_MAILER_SUBJECTS_CONFIRMATION: 叮一下登录验证码
+      GOTRUE_MAILER_TEMPLATES_MAGIC_LINK: http://web/email-templates/magic_link.html
+      GOTRUE_MAILER_TEMPLATES_CONFIRMATION: http://web/email-templates/confirmation.html
+
+      # 按真实客户端 IP 限流（web 容器写 X-Real-IP）。学校 / 公司常常整栋楼一个出口 IP，所以放宽：
+      # 每 5 分钟每个 IP：验证（含微信 / QQ 登录换会话）300 次、刷新令牌 1800 次、发验证码 300 次；全站每小时发邮件上限另设
+      GOTRUE_RATE_LIMIT_HEADER: X-Real-IP
+      GOTRUE_RATE_LIMIT_VERIFY: "300"
+      GOTRUE_RATE_LIMIT_TOKEN_REFRESH: "1800"
+      GOTRUE_RATE_LIMIT_OTP: "300"
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: ${RATE_LIMIT_EMAIL_SENT:-100}
+
+  # --------------------------------------------------------------------------
+  # 数据接口（PostgREST）
+  # --------------------------------------------------------------------------
+  rest:
+    image: ${PLING_REGISTRY:-}postgrest/postgrest:v14.17
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "postgrest", "--ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@db:5432/postgres
+      PGRST_DB_SCHEMAS: public
+      # 应用启动时一次读全量数据（成员、提醒、近 60 天的完成记录……），默认 1000 行会被悄悄截断
+      PGRST_DB_MAX_ROWS: ${PGRST_DB_MAX_ROWS:-50000}
+      PGRST_DB_EXTRA_SEARCH_PATH: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_ADMIN_SERVER_PORT: 3001
+      PGRST_ADMIN_SERVER_HOST: localhost
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_APP_SETTINGS_JWT_EXP: ${JWT_EXPIRY:-3600}
+    command: ["postgrest"]
+
+  # --------------------------------------------------------------------------
+  # 实时同步（Realtime）。网关按 realtime-dev.supabase-realtime 这个名字找它（官方要求），这里用网络别名
+  # --------------------------------------------------------------------------
+  realtime:
+    image: ${PLING_REGISTRY:-}supabase/realtime:v2.134.10
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      default:
+        aliases:
+          - realtime-dev.supabase-realtime
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sSfL --head -o /dev/null -H \"Authorization: Bearer ${ANON_KEY}\" http://localhost:4000/api/tenants/realtime-dev/health"]
+      timeout: 5s
+      interval: 30s
+      retries: 3
+      start_period: 10s
+    environment:
+      PORT: 4000
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: supabase_admin
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: postgres
+      DB_AFTER_CONNECT_QUERY: 'SET search_path TO _realtime'
+      DB_ENC_KEY: ${REALTIME_DB_ENC_KEY}
+      API_JWT_SECRET: ${JWT_SECRET}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      METRICS_JWT_SECRET: ${JWT_SECRET}
+      ERL_AFLAGS: -proto_dist inet_tcp
+      DNS_NODES: "''"
+      RLIMIT_NOFILE: "10000"
+      APP_NAME: realtime
+      SEED_SELF_HOST: "true"
+      RUN_JANITOR: "true"
+      DISABLE_HEALTHCHECK_LOGGING: "true"
+
+  # --------------------------------------------------------------------------
+  # 文件（Storage），存在 ${PLING_DATA_DIR}/storage
+  # --------------------------------------------------------------------------
+  storage:
+    image: ${PLING_REGISTRY:-}supabase/storage-api:v1.74.0
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      db:
+        condition: service_healthy
+      rest:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/status"]
+      timeout: 5s
+      interval: 5s
+      retries: 3
+      start_period: 10s
+    environment:
+      ANON_KEY: ${ANON_KEY}
+      SERVICE_KEY: ${SERVICE_ROLE_KEY}
+      POSTGREST_URL: http://rest:3000
+      AUTH_JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD}@db:5432/postgres
+      STORAGE_PUBLIC_URL: ${PLING_PUBLIC_URL}/api
+      REQUEST_ALLOW_X_FORWARDED_PATH: "true"
+      FILE_SIZE_LIMIT: 52428800
+      STORAGE_BACKEND: file
+      GLOBAL_S3_BUCKET: stub
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: stub
+      REGION: stub
+      # 照片在客户端已经压缩过，不需要服务端图片处理（省一个 imgproxy 容器）
+      ENABLE_IMAGE_TRANSFORMATION: "false"
+      S3_PROTOCOL_ACCESS_KEY_ID: ${S3_PROTOCOL_ACCESS_KEY_ID}
+      S3_PROTOCOL_ACCESS_KEY_SECRET: ${S3_PROTOCOL_ACCESS_KEY_SECRET}
+    volumes:
+      - ${PLING_DATA_DIR:-../data}/storage:/var/lib/storage:z
+
+  # --------------------------------------------------------------------------
+  # 云函数（edge-runtime）：登录、推送、服务号……代码在 ../supabase/functions
+  # --------------------------------------------------------------------------
+  functions:
+    image: ${PLING_REGISTRY:-}supabase/edge-runtime:v1.76.2
+    restart: unless-stopped
+    logging: *logging
+    volumes:
+      - ../supabase/functions:/home/deno/functions:ro,z
+      - ./functions-main:/home/deno/main:ro,z
+      - deno-cache:/root/.cache/deno
+    depends_on:
+      db:
+        condition: service_healthy
+      api-gw:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/9000'"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      SUPABASE_URL: http://api-gw:8000
+      SUPABASE_PUBLIC_URL: ${PLING_PUBLIC_URL}/api
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      SUPABASE_DB_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+      VERIFY_JWT: "false"
+      # 云函数第一次运行时下载 npm: 依赖（之后缓存在 deno-cache 卷里）；国内用 npmmirror
+      NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}
+      PLING_PUBLIC_URL: ${PLING_PUBLIC_URL}
+      PLING_CRON_SECRET: ${PLING_CRON_SECRET}
+      PLING_CORS_ORIGINS: ${PLING_CORS_ORIGINS:-}
+      WECHAT_OPEN_APPID: ${WECHAT_OPEN_APPID:-}
+      WECHAT_OPEN_SECRET: ${WECHAT_OPEN_SECRET:-}
+      WECHAT_MP_APPID: ${WECHAT_MP_APPID:-}
+      WECHAT_MP_SECRET: ${WECHAT_MP_SECRET:-}
+      WECHAT_MP_TOKEN: ${WECHAT_MP_TOKEN:-}
+      WECHAT_MP_TEMPLATE_ID: ${WECHAT_MP_TEMPLATE_ID:-}
+      WECHAT_MP_TEMPLATE_FIELDS: ${WECHAT_MP_TEMPLATE_FIELDS:-title=thing1,time=time2,stage=phrase3}
+      QQ_APPID: ${QQ_APPID:-}
+      QQ_APPKEY: ${QQ_APPKEY:-}
+    command: ["start", "--main-service", "/home/deno/main", "--user-worker-request-idle-timeout", "150000"]
+
+  # --------------------------------------------------------------------------
+  # 数据库（Supabase 的 Postgres），数据在 ${PLING_DATA_DIR}/db，不对外开端口
+  # 进数据库：docker compose exec db psql -U postgres
+  # --------------------------------------------------------------------------
+  db:
+    image: ${PLING_REGISTRY:-}supabase/postgres:17.6.1.136
+    restart: unless-stopped
+    logging: *logging
+    volumes:
+      - ./supabase/db/realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:Z
+      - ./supabase/db/webhooks.sql:/docker-entrypoint-initdb.d/init-scripts/98-webhooks.sql:Z
+      - ./supabase/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:Z
+      - ./supabase/db/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql:Z
+      - ./supabase/db/_supabase.sql:/docker-entrypoint-initdb.d/migrations/97-_supabase.sql:Z
+      - ./supabase/db/logs.sql:/docker-entrypoint-initdb.d/migrations/99-logs.sql:Z
+      - ./supabase/db/pooler.sql:/docker-entrypoint-initdb.d/migrations/99-pooler.sql:Z
+      - ${PLING_DATA_DIR:-../data}/db:/var/lib/postgresql/data:Z
+      - db-config:/etc/postgresql-custom
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    environment:
+      POSTGRES_HOST: /var/run/postgresql
+      PGPORT: 5432
+      POSTGRES_PORT: 5432
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: postgres
+      POSTGRES_DB: postgres
+      JWT_EXP: ${JWT_EXPIRY:-3600}
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "log_min_messages=fatal"]
+
+  # --------------------------------------------------------------------------
+  # 管理后台 Supabase Studio（可选：COMPOSE_PROFILES 里带 studio 才启动）
+  # 只监听服务器本机 127.0.0.1:3000，用 SSH 隧道访问：ssh -L 3000:127.0.0.1:3000 你的服务器
+  # --------------------------------------------------------------------------
+  studio:
+    image: ${PLING_REGISTRY:-}supabase/studio:2026.09.07-sha-7996410
+    profiles: ["studio"]
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      - 127.0.0.1:${STUDIO_PORT:-3000}:3000
+    depends_on:
+      meta:
+        condition: service_started
+    environment:
+      HOSTNAME: "0.0.0.0"
+      STUDIO_PG_META_URL: http://meta:8080
+      POSTGRES_PORT: 5432
+      POSTGRES_HOST: db
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER_READ_WRITE: postgres
+      PG_META_CRYPTO_KEY: ${PG_META_CRYPTO_KEY}
+      PGRST_DB_SCHEMAS: public
+      DEFAULT_ORGANIZATION_NAME: Pling
+      DEFAULT_PROJECT_NAME: pling
+      SUPABASE_URL: http://api-gw:8000
+      SUPABASE_PUBLIC_URL: ${PLING_PUBLIC_URL}/api
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
+      AUTH_JWT_SECRET: ${JWT_SECRET}
+      ENABLED_FEATURES_LOGS_ALL: "false"
+      SNIPPETS_MANAGEMENT_FOLDER: /app/snippets
+      EDGE_FUNCTIONS_MANAGEMENT_FOLDER: /app/edge-functions
+    volumes:
+      - ${PLING_DATA_DIR:-../data}/studio-snippets:/app/snippets:z
+      - ../supabase/functions:/app/edge-functions:ro,z
+
+  meta:
+    image: ${PLING_REGISTRY:-}supabase/postgres-meta:v0.99.0
+    profiles: ["studio"]
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PG_META_PORT: 8080
+      PG_META_DB_HOST: db
+      PG_META_DB_PORT: 5432
+      PG_META_DB_NAME: postgres
+      PG_META_DB_USER: postgres
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      CRYPTO_KEY: ${PG_META_CRYPTO_KEY}
+
+volumes:
+  db-config:
+  deno-cache:
+  letsencrypt:
+  certbot-www:

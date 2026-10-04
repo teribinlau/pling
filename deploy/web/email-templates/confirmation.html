@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>叮一下登录验证码</title>
+</head>
+<body style="margin:0;padding:24px 12px;background:#f2f1ec;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;color:#1d1d1b;">
+  <div style="max-width:440px;margin:0 auto;background:#ffffff;border-radius:12px;padding:28px 24px;">
+    <p style="margin:0 0 6px;font-size:14px;color:#6b6a65;">叮一下</p>
+    <h1 style="margin:0 0 18px;font-size:20px;font-weight:600;">欢迎使用叮一下 · 你的登录验证码</h1>
+    <p style="margin:0 0 10px;font-size:34px;line-height:1.2;letter-spacing:8px;font-weight:700;font-family:Menlo,Consolas,'Courier New',monospace;">{{ .Token }}</p>
+    <p style="margin:0 0 22px;font-size:14px;line-height:1.6;color:#55544f;">15 分钟内有效。在叮一下的登录页（网页版或电脑客户端）输入这 6 位数字就能登录。</p>
+    <p style="margin:0 0 22px;font-size:14px;"><a href="{{ .ConfirmationURL }}" style="color:#0e7c6b;">也可以点这里直接打开网页版并登录</a></p>
+    <p style="margin:0;font-size:12px;line-height:1.6;color:#8d8c86;">如果不是你本人在登录，忽略这封邮件就行：别人拿不到这个验证码，就登录不了你的账号。</p>
+  </div>
+</body>
+</html>
